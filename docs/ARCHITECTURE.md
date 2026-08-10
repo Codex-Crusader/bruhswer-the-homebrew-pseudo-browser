@@ -1,6 +1,6 @@
 # Architecture
 
-**Status: current.** This describes the code that ships in v0.9.0.
+**Status: current.** This describes the code that ships in v0.9.1.
 
 Earlier designs (WSL2, Hyper-V, QEMU) were built, measured, and rejected. They live in
 [`research/`](research/) as evidence and are not guidance. If you want the story of how
@@ -148,6 +148,33 @@ downloaded file, or any other browser-controlled input.
 ```
 
 Steps 4 and 8 are the reason the app exists. Everything else is plumbing around them.
+
+---
+
+## The trusted computing base
+
+If you are reviewing this and want to know what actually matters, read these and skip
+the rest. A security decision made anywhere else is a bug.
+
+| Module | Why it is in the TCB |
+|---|---|
+| `security/verifier.py` | The only thing that decides whether the browser may launch |
+| `security/browser_guard.py` | Profile confinement, ACLs, command-line inspection |
+| `network/network_guard.py` | Firewall policy verification |
+| `sysquery.py` | The only place an external program is ever run |
+| `browser/edge.py`, `browser/urls.py` | Launch argv construction, URL refusal |
+| `sessions/session_manager.py` | Session destruction, reparse-point handling |
+| `downloads/quarantine.py` | Quarantine paths and export |
+| `config.py`, `verdict.py` | Constants, and the rule that UNKNOWN is not PASS |
+
+**1,789 lines of the application's 4,620.** The remaining 2,831 are UI, window hosting,
+orchestration and presentation. They can be wrong without a security property being
+wrong, which is the point of keeping the split visible.
+
+Not in the TCB, and deliberately so: everything under `ui/` (it renders verdicts, it
+never computes one), `browser/embed.py` (Win32 window reparenting), `host/host_guard.py`
+(advisory only, changes nothing by itself), and everything in `/tools` at the repository
+root, which is research tooling that does not ship.
 
 ---
 

@@ -1,8 +1,23 @@
 # Testing
 
-**146 assertions across 7 suites, 0 failures**, run repeatedly, no known flaky tests.
+**151 assertions across 7 suites, 0 failures.**
 
 More usefully: what the tests actually establish, and what they deliberately do not.
+
+> ### One known flaky suite
+>
+> `test_browser_ui.py` **failed once inside `run_all.py` and then passed 29/29 standalone
+> minutes later, with no code change in between.** It is the only suite that has done
+> this, and the cause is not yet known.
+>
+> This page previously said "no known flaky tests". That is why it no longer does.
+> A flaky suite is a defect by this project's own release checklist, and pretending
+> otherwise would be the same failure the rest of this document is about.
+>
+> The failure also exposed a second defect, since fixed: `run_all.py` printed only
+> assertion failures and **discarded the child's stderr**, so a suite that crashed
+> rather than failing an assertion reported `FAIL` with no evidence at all. It now
+> prints the stderr tail when a suite produces no assertion failure.
 
 ---
 
@@ -10,7 +25,7 @@ More usefully: what the tests actually establish, and what they deliberately do 
 
 | Suite | Assertions | Needs | What it establishes |
 |---|---|---|---|
-| `test_security.py` | 47 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity |
+| `test_security.py` | 52 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity |
 | `test_persistent_profile.py` | 13 | firewall policy | Settings survive consecutive launches; the profile is kept and stays usable |
 | `test_end_to_end.py` | 10 | firewall policy | A real disposable session, real browser, real rules: router blocked, internet reachable, profile destroyed |
 | `test_network_regression.py` | 10 | firewall policy | Rule scope, and the browser's own token failing to alter its rules |

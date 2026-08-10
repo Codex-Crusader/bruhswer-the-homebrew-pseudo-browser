@@ -27,6 +27,7 @@ from app.browser import edge  # noqa: E402
 from app.controller import controller as ctrl  # noqa: E402
 from app.downloads import quarantine  # noqa: E402
 from app.privacy import privacy_guard  # noqa: E402
+from app.security import browser_guard  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
 from app.verdict import Check, Verdict, worst  # noqa: E402
 
@@ -468,6 +469,33 @@ class TestQuarantineExport(unittest.TestCase):
             path=Path("totally-legit.exe"), size=1,
             modified=session_manager.datetime.now(session_manager.timezone.utc))
         self.assertTrue(item.is_executable_type)
+
+
+class TestProfileCollisionUsesPathAncestry(unittest.TestCase):
+    """The check used str.startswith, so a sibling directory whose name merely began
+    with the same characters counted as a collision and blocked the launch."""
+
+    def setUp(self):
+        self.edge = Path(config.os.environ["LOCALAPPDATA"]) / "Microsoft" / "Edge" / \
+            "User Data"
+
+    def test_sibling_with_a_prefix_name_is_not_a_collision(self):
+        self.assertFalse(browser_guard._is_within(
+            Path(str(self.edge) + "-Evil"), self.edge))
+
+    def test_the_directory_itself_is_a_collision(self):
+        self.assertTrue(browser_guard._is_within(self.edge, self.edge))
+
+    def test_a_profile_inside_it_is_a_collision(self):
+        self.assertTrue(browser_guard._is_within(self.edge / "Default", self.edge))
+
+    def test_windows_path_case_does_not_defeat_the_check(self):
+        self.assertTrue(browser_guard._is_within(
+            Path(str(self.edge).upper()) / "Default", self.edge))
+
+    def test_bruhswers_own_profile_is_not_a_collision(self):
+        self.assertFalse(browser_guard._is_within(
+            config.PROFILE_PERSISTENT, self.edge))
 
 
 class TestFailClosedSemantics(unittest.TestCase):

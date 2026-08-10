@@ -96,6 +96,17 @@ def _read_acl(profile_dir: Path) -> str:
     return proc.stdout or ""
 
 
+def _is_within(candidate: Path, ancestor: Path) -> bool:
+    """True if candidate is ancestor or sits under it. Lowered because Windows paths are
+    case-insensitive and is_relative_to is not."""
+    try:
+        low = Path(str(candidate).lower())
+        return low == Path(str(ancestor).lower()) or low.is_relative_to(
+            Path(str(ancestor).lower()))
+    except (OSError, ValueError):
+        return False
+
+
 def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
     checks: list[Check] = []
     root = config.ROOT.resolve()
@@ -119,8 +130,9 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         Path(config.os.environ["LOCALAPPDATA"]) / "Microsoft" / "Edge" / "User Data",
         Path(config.os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data",
     ]
-    collides = any(
-        str(resolved).lower().startswith(str(p).lower()) for p in forbidden_parents)
+    # Path ancestry, not string prefix. "User Data-Evil" starts with "User Data" while
+    # being a different directory, which made this fail a launch it should have allowed.
+    collides = any(_is_within(resolved, p) for p in forbidden_parents)
     checks.append(Check(
         "browser.profile.separate", "Separate from your normal browser profile",
         Verdict.PASS if not collides else Verdict.FAIL, critical=True,

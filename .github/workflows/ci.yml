@@ -129,14 +129,9 @@ jobs:
       - name: Ruff
         shell: bash
         run: |
-          # Ruff is a DEVELOPMENT tool installed by this job only. It is never
-          # imported by the application and does not appear in [project.dependencies],
-          # so the standard-library-only rule still holds. Pinned, because an
-          # unpinned linter turns someone else's release into a red build here.
-          #
-          # This step says nothing about whether bruhswer is secure. It catches dead
-          # imports and obvious bug shapes. The security properties are measured by
-          # test_security.py and, for the rest, by hand on real hardware.
+          # Development tool, installed by this job only, never imported by the app, so
+          # the standard-library-only rule holds. Pinned so someone else's release
+          # cannot turn this red. Says nothing about whether bruhswer is secure.
           pip install "ruff==0.16.2"
           ruff check --output-format=github .
 
@@ -194,11 +189,8 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          # The CURRENT documentation set. Historical investigations live in
-          # docs/research/ and are deliberately NOT listed here: they are evidence,
-          # they are finished, and nothing should fail a build because an archived
-          # document was archived. This list broke once when the research move
-          # renamed docs/THREAT-MODEL.md, which is exactly what it is here to catch.
+          # The CURRENT documentation set. docs/research/ is deliberately not listed:
+          # nothing should fail a build because an archived document was archived.
           for f in LICENSE README.md SECURITY.md .gitignore \
                    docs/ARCHITECTURE.md docs/SECURITY-MODEL.md \
                    docs/LIMITATIONS.md docs/TESTING.md \
@@ -214,9 +206,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          # The research move rewrote links across nine files by hand. A broken
-          # relative link is the failure mode that move has, so check it mechanically
-          # rather than trusting that the sweep caught everything.
+          # A broken relative link is the failure mode a bulk doc move has.
           python3 - <<'PY'
           import pathlib, re, sys
           link = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
@@ -231,9 +221,8 @@ jobs:
                   if not target:
                       continue
                   resolved = (p.parent / target).resolve()
-                  # ../../releases and friends are GitHub's own relative shorthand.
-                  # They resolve on github.com and cannot resolve on disk, so a
-                  # target outside the repository is out of scope, not broken.
+                  # ../../releases is GitHub's relative shorthand: resolves on the site,
+                  # never on disk. Out of scope, not broken.
                   if pathlib.Path.cwd() not in resolved.parents and resolved != pathlib.Path.cwd():
                       continue
                   if not resolved.exists():

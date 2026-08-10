@@ -63,6 +63,7 @@ RDW_INVALIDATE = 0x0001
 RDW_ERASE = 0x0004
 RDW_ALLCHILDREN = 0x0080
 RDW_UPDATENOW = 0x0100
+SPI_GETWORKAREA = 0x0030
 
 # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 DPI_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
@@ -89,6 +90,10 @@ USER32.EnumWindows.argtypes = [ctypes.c_void_p, wt.LPARAM]
 USER32.EnumWindows.restype = wt.BOOL
 USER32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
 USER32.GetWindowThreadProcessId.restype = wt.DWORD
+USER32.EnumChildWindows.argtypes = [wt.HWND, ctypes.c_void_p, wt.LPARAM]
+USER32.EnumChildWindows.restype = wt.BOOL
+USER32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+USER32.GetWindowRect.restype = wt.BOOL
 USER32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
 USER32.GetClassNameW.restype = ctypes.c_int
 USER32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
@@ -252,6 +257,24 @@ def fit(hwnd: int, width: int, height: int) -> None:
     USER32.UpdateWindow(hwnd)
 
 
+def work_area() -> tuple[int, int, int, int]:
+    """The desktop area excluding the taskbar, as (left, top, width, height).
+
+    Tk only exposes the full screen size, so a window sized from winfo_screenheight
+    runs underneath the taskbar. bruhswer's status lights are the bottom 43px of the
+    window, so that is exactly the strip that disappears. Falls back to the full
+    screen if the query fails, which is the pre-existing behaviour.
+    """
+    rect = wt.RECT()
+    try:
+        if USER32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            return (rect.left, rect.top,
+                    rect.right - rect.left, rect.bottom - rect.top)
+    except (OSError, ctypes.ArgumentError):
+        pass
+    return (0, 0, USER32.GetSystemMetrics(0), USER32.GetSystemMetrics(1))
+
+
 def enable_dpi_awareness() -> str:
     """Make this process DPI-aware BEFORE any window exists.
 
@@ -280,6 +303,50 @@ def enable_dpi_awareness() -> str:
     except (AttributeError, OSError):
         pass
     return "unavailable"
+
+
+def is_paint_ready(hwnd: int) -> bool:
+    """True once Chromium has built the compositor surface for this window.
+
+    MEASURED, not guessed. On this machine the top-level window appears with its
+    render widget already present and already sized, but the "Intermediate D3D Window"
+    - the compositor surface - does not exist until about 50ms later. Reparenting in
+    that gap gives a window that hosts successfully and then paints nothing: a blank
+    stage under a "WE GOOD" status. That is what a 150ms host poll reproduced.
+
+    Falls back to the render widget when there is no D3D surface at all, which is what
+    software rendering looks like, so this can never block hosting forever.
+    """
+    if not is_alive(hwnd):
+        return False
+    found = {"d3d": False, "widget": False}
+
+    def _visit(child, _):
+        name = _class_name(child)
+        if "D3D" in name:
+            found["d3d"] = True
+        elif name == "Chrome_RenderWidgetHostHWND":
+            width, height = _client_size(child)
+            found["widget"] = width > 1 and height > 1
+        return True
+
+    try:
+        USER32.EnumChildWindows(wt.HWND(hwnd), _WNDENUMPROC(_visit), 0)
+    except (ctypes.ArgumentError, OSError):
+        return False
+    return found["d3d"] or found["widget"]
+
+
+def _class_name(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    USER32.GetClassNameW(wt.HWND(hwnd), buf, 256)
+    return buf.value
+
+
+def _client_size(hwnd: int) -> tuple[int, int]:
+    rect = wt.RECT()
+    USER32.GetWindowRect(wt.HWND(hwnd), ctypes.byref(rect))
+    return rect.right - rect.left, rect.bottom - rect.top
 
 
 def is_alive(hwnd: int) -> bool:

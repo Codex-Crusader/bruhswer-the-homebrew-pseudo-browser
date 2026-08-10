@@ -96,6 +96,23 @@ Wanted:
 - **Never** let CI report coverage it cannot actually perform. That rule is not
   negotiable and predates this list.
 
+#### Adversarial vectors the firewall suites do not yet cover
+
+The firewall is the main enforced boundary, and it is scoped to an executable identity.
+Everything that changes which process is sending traffic is therefore worth attacking,
+and none of these is currently a test:
+
+| Vector | The question |
+|---|---|
+| Process tree | Do Edge's child and helper processes inherit the rule, or does a helper send from an image the rule does not name? |
+| Executable replacement | What happens if the named `msedge.exe` path is replaced or shadowed? |
+| Edge update | An update rewrites the binary. Does the rule still bind after it, and does bruhswer notice if it does not? |
+| DNS separately from destination IP | The suites block destination addresses. The browser to resolver to private-destination path is a different question and deserves its own model |
+| IPv6 | Link-local, ULA, IPv4-mapped IPv6, dual-stack fallback, and DNS resolving to a private IPv6 address |
+
+`test_localhost_surface.py` already probes IPv6 loopback and several address encodings,
+so the machinery exists. These would extend it rather than start from nothing.
+
 ### 6. Edge version compatibility testing
 
 bruhswer depends on measured Edge behaviour, and Edge updates roughly monthly. Several

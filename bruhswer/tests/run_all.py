@@ -85,9 +85,23 @@ def main() -> int:
         else:
             rows.append((label, "FAIL", elapsed))
             failures += 1
+            reported = 0
             for line in (proc.stdout or "").splitlines():
                 if line.strip().startswith("FAILED:") or "[FAIL]" in line:
                     print(f"    {line.strip()}")
+                    reported += 1
+
+            # A suite that CRASHES fails without ever printing an assertion, and its
+            # traceback goes to stderr - which was captured and then thrown away, so
+            # the operator saw "FAIL" and nothing else. That happened, and the only
+            # way to learn anything was to re-run the suite by hand, by which point it
+            # passed. Evidence that exists must not be discarded.
+            if not reported:
+                tail = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
+                print(f"    no assertion failed - suite exited {proc.returncode}, "
+                      f"so it crashed. Last stderr:")
+                for line in (tail[-12:] or ["    <stderr was empty too>"]):
+                    print(f"      {line.strip()[:160]}")
 
     print("\n" + "=" * 74)
     for label, verdict, elapsed in rows:

@@ -1,13 +1,9 @@
 """Privacy - the settings actually present in this profile, read back from disk.
 
-READ THE PROFILE BACK. This panel used to render every setting as a green "ON" purely
-because it appeared in privacy_guard.STANDARD - that is, it showed bruhswer's
-INTENTIONS and called them state. The project already knows that is wrong:
-privacy_guard.REJECTED documents two preferences Chromium deliberately reverts when
-they are written from outside, so "we wrote it" has never been evidence that it stuck.
-
-A green light nobody verified is the exact defect class this project treats as a
-vulnerability, so the panel asks the profile.
+This panel used to render every setting green because it appeared in
+privacy_guard.STANDARD, i.e. it showed intentions and called them state. Chromium
+reverts some preferences written from outside (privacy_guard.REJECTED), so "we wrote
+it" was never evidence. It asks the profile now.
 """
 
 from __future__ import annotations
@@ -19,9 +15,8 @@ from ... import config
 from ...privacy import privacy_guard
 from . import chrome
 
-# Findings from a specific recorded comparison run against stock Edge, NOT live state.
-# Rendered dim and labelled as a past measurement so they cannot be misread as "right
-# now" - the whole panel exists because that distinction was got wrong once already.
+# A recorded comparison run against stock Edge, not live state. Rendered dim and
+# labelled as past, because this panel exists from getting that distinction wrong once.
 _COMPARISON = (("Third-party cookies", "RESTRICTED"),
                ("Permissions", "CONSERVATIVE"),
                ("WebRTC local-IP exposure", "RESTRICTED"))

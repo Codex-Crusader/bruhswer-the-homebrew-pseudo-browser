@@ -33,7 +33,16 @@ OFF_GREY = "#6E7681"
 
 # --- paths ---------------------------------------------------------------------
 # All BRUHWSER state lives under one directory. Nothing is written anywhere else.
-ROOT = Path(os.environ["LOCALAPPDATA"]) / "BRUHWSER"
+_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
+if not _LOCALAPPDATA:
+    # Was os.environ["LOCALAPPDATA"], which died with a bare KeyError off Windows.
+    raise RuntimeError(
+        "bruhswer is Windows-only: it wraps Microsoft Edge and enforces its controls "
+        "through the Windows Firewall and Windows ACLs. LOCALAPPDATA is not set, so "
+        "this is not a Windows environment. Set LOCALAPPDATA to run the "
+        "platform-independent unit tests on another OS.")
+
+ROOT = Path(_LOCALAPPDATA) / "BRUHWSER"
 PROFILE_PERSISTENT = ROOT / "profiles" / "persistent"
 PROFILE_DISPOSABLE_ROOT = ROOT / "profiles" / "disposable"
 QUARANTINE = ROOT / "quarantine"

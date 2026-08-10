@@ -26,8 +26,7 @@ def render(body: tk.Misc, result) -> None:
                   if c.check_id.startswith("dns.")]:
         chrome.line(body, check.title, chrome.WORD[check.verdict],
                     chrome.COLOUR[check.verdict], check.detail)
-    # Grey, not red. bruhswer has no VPN and says so rather than scoring itself
-    # against a feature it deliberately does not have.
+    # Grey, not red: an absent feature is not a failed one.
     chrome.line(body, "VPN", "UNSUPPORTED", config.OFF_GREY, _NO_VPN)
 
     chrome.heading(body, "Note")

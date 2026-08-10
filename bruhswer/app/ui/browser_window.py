@@ -43,9 +43,6 @@ from .panels import (
     security_panel,
 )
 
-# Kept as module-level names because this window's own status lights use them. The
-# definitions live in panels.chrome so that every panel and this window render a
-# verdict identically - two colours for one verdict would read as a security claim.
 _COLOUR = chrome.COLOUR
 _WORD = chrome.WORD
 
@@ -66,18 +63,37 @@ class BrowserWindow:
         self.address: tk.Entry
         self.stage: tk.Frame
         self.curtain: tk.Label
+        self.curtain_actions: tk.Frame
         self.status_text: tk.Label
         self.lights: dict[str, tk.Label] = {}
 
         self.root = tk.Tk()
         self.root.title(f"{config.MOAI} {config.APP_NAME}")
         self.root.configure(bg=config.BG_DARK)
-        self.root.geometry("1280x860")
+        self.root.geometry(self._opening_geometry(1280, 860))
         self.root.minsize(900, 600)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._build()
         self.root.after(120, self.startup)
+
+    @staticmethod
+    def _opening_geometry(want_w: int, want_h: int) -> str:
+        """Fit the window inside the taskbar-free work area, and place it there.
+
+        A fixed 1280x860 became a 907px window whose bottom sat at the screen edge, so
+        the status bar - the six verdict lights, the whole point of the product - was
+        rendered underneath the taskbar and could not be seen at all. Measured on
+        1920x1080 at 125%: 60px of overhang against a 43px status bar.
+        """
+        left, top, area_w, area_h = embed.work_area()
+        # Leave room for the title bar and borders the frame adds around the content.
+        chrome_h, chrome_w = 47, 18
+        w = max(900, min(want_w, area_w - chrome_w))
+        h = max(600, min(want_h, area_h - chrome_h))
+        x = left + max(0, (area_w - w - chrome_w) // 2)
+        y = top + max(0, (area_h - h - chrome_h) // 2)
+        return f"{w}x{h}+{x}+{y}"
 
     # ------------------------------------------------------------------ layout
 
@@ -123,12 +139,15 @@ class BrowserWindow:
         tk.Label(bar, text="OPEN IN NEW TAB", font=("Consolas", 8, "bold"),
                  bg=config.BG_PANEL, fg=config.FG_DIM).pack(side="left", padx=(12, 8))
 
-        self.address = tk.Entry(bar, font=("Segoe UI", 11), bd=0,
+        # The Entry sits inside a padded frame because tk.Entry has no text inset, so
+        # the caret and the placeholder rendered flush against the field's edge.
+        field = tk.Frame(bar, bg=config.BG_RAISED)
+        field.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=8)
+        self.address = tk.Entry(field, font=("Segoe UI", 11), bd=0,
                                 bg=config.BG_RAISED, fg=config.BRAND_WHITE,
                                 insertbackground=config.BRAND_YELLOW,
                                 relief="flat")
-        self.address.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=8,
-                          ipady=6)
+        self.address.pack(fill="x", expand=True, padx=10, pady=6)
         self.address.bind("<Return>", lambda e: self.on_navigate())
         self.address.insert(0, "Search, or type a web address")
         self.address.bind("<FocusIn>", self.clear_placeholder)
@@ -158,6 +177,7 @@ class BrowserWindow:
                              f"website can touch your stuff...",
             font=("Consolas", 12), bg="#000000", fg=config.FG_DIM, justify="center")
         self.curtain.place(relx=0.5, rely=0.5, anchor="center")
+        self.curtain_actions = tk.Frame(self.stage, bg="#000000")
 
         status = tk.Frame(self.root, bg=config.BG_PANEL)
         status.pack(fill="x", side="bottom")
@@ -190,12 +210,12 @@ class BrowserWindow:
 
         if self.result.blockers:
             reasons = "\n".join(f"  • {c.title}" for c in self.result.blockers)
-            self.curtain.config(
-                text=f"{config.MOAI}\n\nBRUH. NO.\n\n"
-                     f"Required security controls could not be verified.\n"
-                     f"Browser launch has been blocked.\n\n{reasons}\n\n"
-                     f"Open the menu for details.",
-                fg=config.BAD_RED)
+            self._show_curtain(
+                f"BRUH. NO.\n\nRequired security controls could not be verified.\n"
+                f"Browser launch has been blocked.\n\n{reasons}",
+                config.BAD_RED,
+                [("What failed", self.open_security_panel),
+                 ("Check again", self.startup)])
             self.set_status("Launch blocked")
             return
 
@@ -219,9 +239,7 @@ class BrowserWindow:
         self.hosted_hwnd = None
         self._host_attempts = 0
 
-        self.curtain.config(text=f"{config.MOAI}\n\nStarting {mode} session...",
-                            fg=config.FG_DIM)
-        self.curtain.lift()
+        self._show_curtain(f"Starting {mode} session...", config.FG_DIM)
         self.root.update_idletasks()
 
         outcome = self.controller.start(mode)
@@ -229,19 +247,30 @@ class BrowserWindow:
         self.refresh_lights()
 
         if not outcome.launched:
-            self.curtain.config(text=f"{config.MOAI}\n\nBRUH. NO.\n\n{outcome.message}",
-                                fg=config.BAD_RED)
+            self._show_curtain(f"BRUH. NO.\n\n{outcome.message}", config.BAD_RED,
+                               [("What failed", self.open_security_panel),
+                                ("Try again", self._new_persistent)])
             self.set_status("Launch blocked")
             return
 
         self.update_session_badge()
         self.set_status(outcome.message)
+        # DO NOT SHORTEN THIS. It is not a guess at how long Edge takes to appear, it
+        # is time for Chromium to finish building its compositor. Reparenting the
+        # window before then produces a hosted window that reports success and then
+        # paints nothing - a blank grey stage under a "WE GOOD" status. Tried at
+        # 250ms, reproduced immediately.
         self.root.after(1200, self._try_host)
 
     def _try_host(self) -> None:
         """Poll for this session's Edge window, then host it. Verified, not assumed."""
         self._host_attempts += 1
         hwnd = self.controller.find_browser_window()
+        # Having a window is not the same as being able to paint into it. Wait for the
+        # compositor, or the reparent lands in the gap and the page never draws.
+        if hwnd and not embed.is_paint_ready(hwnd) and self._host_attempts < 25:
+            self.root.after(120, self._try_host)
+            return
         if hwnd:
             self.root.update_idletasks()
             if embed.host_window(hwnd, self.stage.winfo_id()):
@@ -251,14 +280,19 @@ class BrowserWindow:
                 # the two processes have separate input queues until they are joined.
                 embed.attach_input(hwnd, self.root.winfo_id())
                 embed.focus(hwnd)
-                self.curtain.place_forget()
                 # Size it immediately, then again once Tk has settled the frame -
                 # Chromium sizes its compositor from the first WM_SIZE it receives, and
                 # a stale size is what leaves the page looking half-rendered.
+                #
+                # The curtain stays UP through all of this. It used to come down the
+                # instant the reparent succeeded, so the user watched Chromium resize
+                # and repaint itself for the next 900ms - bruhswer's frame appearing
+                # first and the page popping in after it. Now the stage is revealed
+                # once, onto a page that has already settled.
                 self._fit_hosted()
                 self.root.after(200, self._fit_hosted)
+                self.root.after(260, self._reveal_stage)
                 self.root.after(900, self._fit_hosted)
-                self.set_status("WE GOOD")
                 self._watch_job = self.root.after(1500, self._watch)
                 return
 
@@ -267,13 +301,60 @@ class BrowserWindow:
             return
 
         # Honest failure: the browser IS running, it just is not inside our frame.
-        self.curtain.config(
-            text=f"{config.MOAI}\n\nThe browser is running, but bruhswer could not host\n"
-                 f"its window inside this frame.\n\n"
-                 f"It is open as a separate window and is still fully protected -\n"
-                 f"firewall policy, quarantine and session rules all still apply.",
-            fg=config.WARN_AMBER)
+        self._show_curtain(
+            "The browser is running, but bruhswer could not host\n"
+            "its window inside this frame.\n\n"
+            "It is open as a separate window and is still fully protected -\n"
+            "firewall policy, quarantine and session rules all still apply.",
+            config.WARN_AMBER,
+            [("Try again", self._rehost), ("Close the session", self.close_session)])
         self.set_status("Browser running in its own window")
+
+    # ----------------------------------------------------------------- curtain
+
+    def _show_curtain(self, message: str, colour: str,
+                      actions: list | None = None) -> None:
+        """Cover the stage with a message, and offer the action it implies.
+
+        Every one of these states used to end in "use the menu", which asks the user
+        to go and find a thing when the window already knows what they need next.
+        """
+        self.curtain.config(text=f"{config.MOAI}\n\n{message}", fg=colour)
+        self.curtain.place(relx=0.5, rely=0.5, anchor="center")
+        self.curtain.lift()
+        for child in self.curtain_actions.winfo_children():
+            child.destroy()
+        for label, command in (actions or []):
+            tk.Button(self.curtain_actions, text=label, font=("Segoe UI", 10), bd=0,
+                      padx=18, pady=7, bg=config.BG_RAISED, fg=config.BRAND_WHITE,
+                      cursor="hand2", activebackground=config.BRAND_YELLOW,
+                      activeforeground="#111111",
+                      command=command).pack(side="left", padx=7)
+        if actions:
+            self.curtain_actions.place(relx=0.5, rely=0.5, anchor="n", y=90)
+            self.curtain_actions.lift()
+        else:
+            self.curtain_actions.place_forget()
+
+    def _reveal_stage(self) -> None:
+        """Drop the curtain onto a page that has already been sized and painted."""
+        if not self.hosted_hwnd or not embed.is_alive(self.hosted_hwnd):
+            return          # it went away while settling; _watch will report it
+        self._hide_curtain()
+        self.set_status("WE GOOD")
+
+    def _hide_curtain(self) -> None:
+        self.curtain.place_forget()
+        self.curtain_actions.place_forget()
+
+    def _new_persistent(self) -> None:
+        self.open_session(session_manager.PERSISTENT)
+
+    def _rehost(self) -> None:
+        """Try to pull a still-running session's window back into the frame."""
+        self._host_attempts = 0
+        self.set_status("Looking for the browser window...")
+        self._try_host()
 
     def _focus_address(self, _event=None) -> None:
         """Take keyboard focus back from the hosted browser, then into the field."""
@@ -307,12 +388,23 @@ class BrowserWindow:
 
         if self.hosted_hwnd and not embed.is_alive(self.hosted_hwnd):
             self.hosted_hwnd = None
-            self.curtain.config(
-                text=f"{config.MOAI}\n\nThe browser window closed.\n\n"
-                     f"Use the menu to start a new session.",
-                fg=config.WARN_AMBER)
-            self.curtain.place(relx=0.5, rely=0.5, anchor="center")
-            self.set_status("Browser closed")
+            # The hosted WINDOW is gone. That is not the same fact as the browser
+            # having closed, and saying the wrong one is the SS34 failure: a session
+            # whose window was reparented or replaced is still running, still under
+            # policy, and still holding a profile. Ask before reporting.
+            if self.controller.is_running():
+                self._show_curtain(
+                    "The browser is no longer inside bruhswer's frame.\n\n"
+                    "The session is still open and still protected - firewall policy,\n"
+                    "quarantine and session rules all still apply.",
+                    config.WARN_AMBER,
+                    [("Bring it back", self._rehost),
+                     ("Close the session", self.close_session)])
+                self.set_status("Session running, window not hosted")
+            else:
+                self._show_curtain("The browser window closed.", config.WARN_AMBER,
+                                   [("New session", self._new_persistent)])
+                self.set_status("Browser closed")
             self.update_session_badge()
             return
         title = self.controller.browser_title()
@@ -411,10 +503,6 @@ class BrowserWindow:
 
     # ------------------------------------------------------------------ panels
 
-    # Each opener does the same three things: refresh whatever state the panel needs,
-    # open the scrolling shell, hand both to the module that knows how to draw it.
-    # The drawing lives in panels/ so that this class stays about the window.
-
     def _panel(self, title: str, width: int = 640, height: int = 620) -> tk.Frame:
         return chrome.scroll_panel(self.root, title, width, height)
 
@@ -488,12 +576,7 @@ class BrowserWindow:
             embed.focus(self.hosted_hwnd)
 
     def _confirm_disposable_downloads(self) -> bool:
-        """Ask before destroying downloads. Returns False if the user cancels.
-
-        The window decides WHETHER to ask - only a disposable session with files
-        pending needs the question. The dialog itself lives in dialogs.py along with
-        the detach/re-attach rule its callers have to honour.
-        """
+        """Ask before destroying downloads. Returns False if the user cancels."""
         session = self.controller.session
         if session is None or not session.is_disposable:
             return True
@@ -512,9 +595,8 @@ class BrowserWindow:
             return
         ok, message = self.controller.stop()
         self.hosted_hwnd = None
-        self.curtain.config(text=f"{config.MOAI}\n\n{message}",
-                            fg=config.OK_GREEN if ok else config.BAD_RED)
-        self.curtain.place(relx=0.5, rely=0.5, anchor="center")
+        self._show_curtain(message, config.OK_GREEN if ok else config.BAD_RED,
+                           [("New session", self._new_persistent)])
         self.update_session_badge()
         self.set_status(message)
 

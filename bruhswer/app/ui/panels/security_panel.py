@@ -1,8 +1,4 @@
-"""BRUH CHECK - every check the verifier produced, grouped by what it answers.
-
-Renders a VerificationResult that was computed elsewhere. It does not re-run a check
-and it does not decide whether anything is allowed.
-"""
+"""BRUH CHECK - renders a VerificationResult. Re-runs nothing, decides nothing."""
 
 from __future__ import annotations
 
@@ -29,8 +25,8 @@ def render(body: tk.Misc, result) -> None:
         for check in result.checks:
             if check.check_id.split(".")[0] not in prefixes:
                 continue
-            # An unenforceable check is never shown as a verdict. It is a statement
-            # about the platform, and rendering it green or red would both be lies.
+            # An unenforceable check is a statement about the platform, not a verdict.
+            # Green and red would both be wrong.
             if not check.enforceable:
                 chrome.line(body, check.title, "NOT ENFORCEABLE", config.WARN_AMBER,
                             check.detail)

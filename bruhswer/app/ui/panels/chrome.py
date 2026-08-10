@@ -1,10 +1,4 @@
-"""Shared panel furniture: the scrolling shell, a heading, a status line.
-
-Every panel is the same shape - a scrollable dark frame full of coloured status rows -
-so the shape lives in one place. The colour and word maps live here too, because a
-verdict must look the same everywhere it appears. Two panels rendering PASS in two
-different colours would be a UI bug that reads as a security statement.
-"""
+"""Shared panel furniture, and the one definition of what a verdict looks like."""
 
 from __future__ import annotations
 
@@ -13,8 +7,8 @@ import tkinter as tk
 from ... import config
 from ...verdict import Verdict
 
-# The single source of truth for what a verdict looks like. UNKNOWN is amber and is
-# never rendered as green anywhere in the application.
+# Single source of truth. Everything that renders a verdict points here, so the control
+# panel and the browser window cannot drift and show the same verdict two ways.
 COLOUR = {Verdict.PASS: config.OK_GREEN,
           Verdict.FAIL: config.BAD_RED,
           Verdict.UNKNOWN: config.WARN_AMBER}

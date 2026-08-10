@@ -1,13 +1,8 @@
 """Modal confirmations.
 
-Both dialogs here exist to stop bruhswer claiming something it did not do: one before
-files are destroyed, one after a cleanup that did not finish. They are separated from
-the window because a modal grab is a fiddly thing with a hard rule attached - see the
-warning below - and burying that rule inside a 750-line class is how it gets forgotten.
-
-THE RULE: every caller must have released the shared input queue (embed.detach_input)
-BEFORE showing anything here, and must re-attach it if the user backs out. A modal Tk
-grab while two GUI threads share an input queue is how you get a hung window.
+THE RULE: callers must release the shared input queue (embed.detach_input) BEFORE
+showing anything here, and re-attach if the user backs out. A modal Tk grab while two
+GUI threads share an input queue hangs the window.
 """
 
 from __future__ import annotations
@@ -18,14 +13,7 @@ from .. import config
 
 
 def confirm_disposable_downloads(root: tk.Misc, pending: list) -> bool:
-    """Ask before destroying downloads. Returns False if the user cancels.
-
-    Closing a disposable session deletes that session's quarantine along with its
-    profile, which is what "disposable" has to mean. But deleting files a user
-    deliberately downloaded without telling them first is exactly the behaviour this
-    project criticises elsewhere, so they are told what is about to go and given the
-    chance to export it instead.
-    """
+    """Ask before destroying downloads. Returns False if the user cancels."""
     answer = {"go": False}
     win = tk.Toplevel(root)
     win.title(f"{config.MOAI} bruhswer")
@@ -65,11 +53,7 @@ def confirm_disposable_downloads(root: tk.Misc, pending: list) -> bool:
 
 
 def cleanup_incomplete(root: tk.Misc, message: str, on_close_anyway) -> None:
-    """Report a session teardown that did not fully succeed.
-
-    Never claim a clean exit that did not happen (SS34). The user can still close, but
-    not without being told what was left behind.
-    """
+    """Report a teardown that did not fully succeed. Never claim a clean exit (SS34)."""
     warn = tk.Toplevel(root)
     warn.title("bruhswer")
     warn.configure(bg=config.BG_DARK)

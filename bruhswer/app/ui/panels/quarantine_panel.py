@@ -1,8 +1,5 @@
-"""Quarantine - what landed here, and the two deliberate ways out.
-
-Export and delete are passed in as callbacks. This module does not move a file, does
-not choose a destination and does not build a path from anything a website supplied.
-"""
+"""Quarantine - lists what landed here. Export and delete are caller-supplied callbacks;
+this module never moves a file or builds a path."""
 
 from __future__ import annotations
 

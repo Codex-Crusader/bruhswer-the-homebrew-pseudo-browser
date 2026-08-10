@@ -24,11 +24,8 @@ from ..privacy import privacy_guard
 from ..sessions import session_manager
 from .panels import chrome
 
-# Derived from panels.chrome, never restated. This module used to keep its own copy of
-# the verdict-to-colour and verdict-to-word maps, which meant the control panel and the
-# browser window could drift apart and show the same verdict two different ways. That
-# would be a rendering bug that reads to the user as a security statement, so there is
-# now one definition and everything else points at it.
+# Derived from panels.chrome, never restated: this module used to keep its own copy and
+# could drift from the browser window.
 _DOT = {verdict: ("●", colour) for verdict, colour in chrome.COLOUR.items()}
 _WORD = chrome.WORD
 

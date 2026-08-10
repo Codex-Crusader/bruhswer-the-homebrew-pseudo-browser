@@ -1,9 +1,4 @@
-"""Host Guard - what other devices on this network can reach on this PC.
-
-The other direction from every other panel. Note that it shows fixes and does not
-apply them: host-wide changes need Administrator and explicit consent, and nothing a
-webpage does can reach this code path.
-"""
+"""Host Guard - what other devices on this network can reach. Shows fixes, applies none."""
 
 from __future__ import annotations
 
