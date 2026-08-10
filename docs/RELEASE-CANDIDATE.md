@@ -258,7 +258,7 @@ honesty checks, packaging and publication preparation only.
 | Reliability | **PASS** - 146 assertions, 7 suites, 0 failures, repeated |
 | Data protection | **PASS / PARTIAL** - see encryption coverage below |
 | Installer | **PASS** - install, run, uninstall verified on a real machine |
-| GitHub readiness | **PARTIAL** - one placeholder URL outstanding |
+| GitHub readiness | **PASS** - published |
 
 ## Test counts - measured, not calculated
 
@@ -355,8 +355,8 @@ to users.
 
 ```
 bruhswer-0.9.0-setup.exe
-  bytes  : 2,275,723
-  sha256 : B46076C725FF42D9B8375D9F8803F99CD899D3799680581C7AA545E3F6BA1F18
+  bytes  : 2,277,401
+  sha256 : 3BDDDAD6C81BB81B127E1D4B85146F6AF54E1F4E8298C98C1217766E510C62E1
   signed : NO - unsigned, and documented as unsigned
 ```
 
@@ -420,7 +420,7 @@ research spikes, `.venv`, `.idea`, browser profiles, quarantine content and logs
 [x] Full regression passes, twice
 [x] Installer built, and install/run/uninstall verified
 [x] Release artifact reviewed, checksummed, documented as unsigned
-[ ] REPLACE-ME repository URL  <- OWNER ACTION REQUIRED
+[x] Repository URL set (Codex-Crusader/bruhswer-the-homebrew-pseudo-browser)
 ```
 
-**Verdict: ready to publish once the repository URL is set.**
+**Verdict: published.** Repository created, tagged v0.9.0, release published.

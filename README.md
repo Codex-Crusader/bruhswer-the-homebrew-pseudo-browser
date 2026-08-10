@@ -208,7 +208,7 @@ service, no scheduled task, no background updater and no startup entry.
 ### From source
 
 ```powershell
-git clone https://github.com/REPLACE-ME/bruhswer
+git clone https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
 cd bruhswer\bruhswer
 python bruhswer.py
 ```

@@ -108,6 +108,11 @@ jobs:
             exit 1
           }
           Write-Host "--check ran to completion (exit $code, non-zero is expected here)"
+          # Exit 0 EXPLICITLY. Without it the step inherits $LASTEXITCODE from the
+          # python call, and "launch blocked" - the correct answer on a runner with
+          # no Edge and no firewall rules - failed the build. The assertion above is
+          # what this step actually tests: that the report was printed at all.
+          exit 0
 
   hygiene:
     name: CI-safe - repository hygiene
@@ -139,9 +144,15 @@ jobs:
           fi
 
           echo "--- developer machine paths ---"
+          # The allow-list covers the placeholder names this repository genuinely
+          # uses, and it is not padding: the first run of this check failed on
+          # `C:\Users\someone\Desktop\owned.txt`, which is a HOSTILE INPUT in a
+          # path-traversal test, and on a line of prose describing this very check.
+          # Neither is a developer path. A check that cries wolf on its own test
+          # fixtures gets switched off, and then it protects nothing.
           if grep -rIn "C:\\\\Users\\\\" --include="*.py" --include="*.ps1" \
                --include="*.md" --include="*.iss" --exclude-dir=.git . \
-               | grep -viE "youruser|<user>|%USERNAME%|username" ; then
+               | grep -viE "youruser|someone|<user>|%USERNAME%|username|\.\.\.|…" ; then
             echo "::error::an absolute developer path is committed"; fail=1
           fi
 

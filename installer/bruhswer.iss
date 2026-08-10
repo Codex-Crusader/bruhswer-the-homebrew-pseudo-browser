@@ -32,7 +32,7 @@
 #define AppName        "bruhswer"
 #define AppVersion     "0.9.0"
 #define AppPublisher   "The bruhswer authors"
-#define AppURL         "https://github.com/REPLACE-ME/bruhswer"
+#define AppURL         "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser"
 #define AppExeName     "bruhswer.py"
 #define MinPython      "3.11"
 

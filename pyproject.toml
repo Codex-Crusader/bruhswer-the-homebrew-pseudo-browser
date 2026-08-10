@@ -27,12 +27,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-# TODO BEFORE PUBLICATION: replace with the real repository URL. CI fails while any
-# REPLACE-ME remains, so this cannot be published by accident.
-Homepage = "https://github.com/REPLACE-ME/bruhswer"
-Documentation = "https://github.com/REPLACE-ME/bruhswer/tree/main/docs"
-Issues = "https://github.com/REPLACE-ME/bruhswer/issues"
-Security = "https://github.com/REPLACE-ME/bruhswer/blob/main/SECURITY.md"
+Homepage = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser"
+Documentation = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/tree/main/docs"
+Issues = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/issues"
+Security = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/blob/main/SECURITY.md"
 
 [build-system]
 requires = ["setuptools>=68"]
