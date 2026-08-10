@@ -23,8 +23,8 @@ several. That is the point of the file.
 [ ] No suite reported SKIPPED                see note - one suite FAILED once, then passed
 [x] Assertion count recorded here: 151       read from the run, not from memory
 [x] Real-world GUI walkthrough passes        19 OK, 0 problems
-[ ] CI green on the release commit           not observable until the commit is pushed
-[ ] CodeQL green, no open alerts             same
+[x] CI green on the release commit           7/7 jobs success on 1f6103b
+[x] CodeQL green, no open alerts             success on 1f6103b
 ```
 
 > **The SKIPPED box is deliberately not ticked.** No suite skipped, but
@@ -112,7 +112,8 @@ measurement: "browser can't undo it" now names the tested configuration, and
 ```
 [x] SHA-256 generated from the FINAL binary, after the last rebuild
 [x] Checksum matches in: SHA256SUMS.txt and the release notes
-[ ] Published asset downloaded and re-hashed after upload    to be done at publish time
+[x] Published asset downloaded and re-hashed after upload    matches local build,
+    release body and SHA256SUMS.txt
 [x] Release notes written, including what changed and what is still not guaranteed
 [x] Signing status stated honestly (unsigned, and said so)
 [x] Tag pushed
