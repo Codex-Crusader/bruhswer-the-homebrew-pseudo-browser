@@ -1,0 +1,123 @@
+# Security Policy
+
+bruhswer is a security tool, so it should be held to the standard it asks of others.
+This document says how to report a problem, what is in scope, and - just as
+importantly - what bruhswer already knows it cannot do.
+
+## Reporting a vulnerability
+
+**Please report privately, not in a public issue.**
+
+Use GitHub's private vulnerability reporting on this repository:
+
+> **Security** tab → **Report a vulnerability**
+
+That opens a private advisory visible only to the maintainers. It is the only
+supported reporting channel - there is deliberately no email address here, so nothing
+in this repository has to carry a personal contact detail forever.
+
+If private reporting is not enabled or not available to you, open a public issue
+containing **only** the words "security report, please enable private advisories" and
+no technical detail. A maintainer will enable it and follow up.
+
+### What to include
+
+- What you did, in enough detail to reproduce it
+- What you expected, and what happened instead
+- Why you believe it is a security problem rather than a bug
+- The bruhswer version, your Windows version, and your Edge version
+- Any proof-of-concept you are comfortable sharing
+
+### What to expect
+
+| Stage | Target |
+|---|---|
+| Acknowledgement | 7 days |
+| Initial assessment | 30 days |
+| Fix or documented decision | best effort - see below |
+
+bruhswer is maintained by volunteers. These are honest targets, not a contractual
+SLA, and pretending otherwise would be exactly the kind of unearned assurance this
+project refuses to give elsewhere.
+
+### Disclosure
+
+Please give a reasonable window before public disclosure - 90 days is the usual
+convention, and is what this project asks for. If a fix is not possible in that time,
+the limitation gets documented publicly rather than left quiet. Reporters are credited
+in the advisory unless they ask not to be.
+
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| 0.9.x (current pre-1.0) | Yes |
+| earlier | No |
+
+bruhswer is pre-1.0. Only the latest release receives fixes.
+
+## Scope
+
+### In scope
+
+- A website reaching something bruhswer claims to block
+- Escaping the download quarantine, or getting a downloaded file executed
+- Command, argument or path injection through a URL, filename or download name
+- Anything that causes bruhswer to launch the browser with a weakened configuration
+- A local privilege escalation caused by bruhswer's own code, scripts or installer
+- Host Guard applying a change without consent, or failing to roll one back
+- Data written outside `%LOCALAPPDATA%\BRUHWSER` without the user asking
+- **A false security claim.** If bruhswer reports something as verified, blocked or
+  enforced when it is not, that is treated as a vulnerability in its own right, not as
+  a documentation bug. It is the defect class this project cares about most.
+
+### Out of scope
+
+These are not bugs in bruhswer. They are properties of the platform it runs on, and
+they are documented rather than hidden:
+
+- **Anything reachable over localhost.** Windows Firewall does not filter loopback.
+  Measured, repeatedly, across IPv4, IPv6, alternate loopback addresses, decimal and
+  hex address forms, the host's own LAN address, and via page-driven `fetch`, `POST`
+  and WebSocket. bruhswer reports this as `NOT ENFORCEABLE` everywhere a user can see
+  it, and a regression test fails if it is ever described as anything else. See
+  [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+- Vulnerabilities in Microsoft Edge or Chromium - report those to Microsoft.
+- Vulnerabilities in Windows itself - report those to Microsoft.
+- Anything requiring Administrator access you already have.
+- Anything requiring physical access to an unlocked machine.
+- A fully compromised host. bruhswer runs as an ordinary user process; it cannot
+  defend a machine that is already owned.
+- Browser fingerprinting. bruhswer reduces collection surfaces. It does not claim
+  anonymity and never will.
+- Social engineering of the user, including persuading them to export a quarantined
+  file and run it.
+
+## What bruhswer does not protect against
+
+Stated plainly, because a security policy that only lists strengths is marketing:
+
+- It is **not** a virtual machine and provides no VM isolation.
+- It does **not** sandbox the browser process itself. Chromium's sandbox contains
+  renderers; the browser process runs on an ordinary user token.
+- It does **not** provide a VPN, and reports `UNSUPPORTED` rather than implying one.
+- It **cannot** confirm whether your DNS queries leave the machine encrypted, and
+  reports `UNKNOWN` rather than guessing.
+- It does **not** detect malware. Quarantine means a file was not let out. It does not
+  mean the file is safe.
+- Release artifacts are **unsigned**. See the release notes.
+
+## Security design
+
+Details of the model, what was measured, and what remains unverified:
+
+- [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/NETWORK-PRIVACY.md](docs/NETWORK-PRIVACY.md)
+- [docs/PRIVACY.md](docs/PRIVACY.md)
+
+## No certifications
+
+bruhswer holds no security certification, has had no third-party audit, and claims
+neither. It has been reviewed by its authors and by automated analysis. That is all,
+and it is stated here so nobody has to infer it.

@@ -1,0 +1,106 @@
+# bruhswer — files that must never reach a public repository.
+#
+# Patterns here are deliberately SPECIFIC. A broad rule like `*.key` or `tools/` is
+# how source files go missing without anyone noticing, and a security tool whose
+# repository silently omits part of itself cannot be audited. Every entry below either
+# names an exact artefact or is anchored to a directory that contains no source.
+
+# --- secrets and credentials -----------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+*.credentials
+
+# Private keys, WITHOUT swallowing source. `*.key` alone would also match a legitimate
+# file such as `signing.key.md` or a fixture named `test.key`; anchoring to the
+# extension and listing the real cases keeps the rule honest.
+*.private.key
+*.secret.key
+
+# --- bruhswer runtime state ------------------------------------------------------
+# All of this normally lives in %LOCALAPPDATA%\BRUHWSER, outside the repository.
+# These patterns are belt-and-braces for anyone who redirects it here.
+#
+# EVERY ONE IS ANCHORED WITH A LEADING SLASH, and that is not stylistic.
+# An unanchored `downloads/` matches a directory of that name at ANY depth - which
+# includes bruhswer/app/downloads/, a SOURCE package containing quarantine.py. The
+# unanchored version of this list would have silently published a repository with
+# the entire download-quarantine module missing, and the app would not have
+# imported. Caught by an independent review before publication; anchor these.
+/BRUHWSER/
+/profiles/
+/quarantine/
+/state/
+/logs/
+/downloads/
+*.log
+
+# --- Python ----------------------------------------------------------------------
+# __pycache__ and bytecode are safe unanchored: no source directory is ever named
+# that. Everything below which names a plausible package directory IS anchored,
+# for the reason given above.
+__pycache__/
+*.py[cod]
+*$py.class
+/.venv/
+/venv/
+/env/
+.Python
+/build/
+/dist/
+/sdist/
+/wheels/
+/develop-eggs/
+/eggs/
+/.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- test and tooling caches -----------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- IDE and editor --------------------------------------------------------------
+# .idea holds absolute paths to the developer's machine and their run configurations.
+# bruhswer must run without PyCharm (brief §38), so none of this belongs in the repo.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- installer build output ------------------------------------------------------
+# The .iss SOURCE is committed and reviewable. Only compiled output is excluded, so
+# nobody can quietly ship an installer whose script is not in the repository.
+installer/Output/
+installer/build/
+*.exe
+!installer/**/*.iss
+
+# --- OS --------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# --- local machine artefacts -----------------------------------------------------
+*.local
+local.settings.json
+/scratch/
+/tmp/

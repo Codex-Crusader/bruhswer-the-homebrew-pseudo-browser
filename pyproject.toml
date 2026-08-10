@@ -1,0 +1,43 @@
+[project]
+name = "bruhswer"
+version = "0.9.0"
+description = "Browse the internet. Trust absolutely nothing. A hardened Microsoft Edge wrapper for Windows."
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+readme = "README.md"
+keywords = ["security", "privacy", "browser", "windows", "edge"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+]
+
+# EMPTY, AND IT STAYS EMPTY.
+#
+# bruhswer uses the Python standard library only. That is a security decision, not an
+# accident of scope: every package added here is a package the user has to trust, and
+# a browser-hardening tool that quietly pulls in a dependency tree has given away the
+# argument it is making. The CI workflow fails the build if a requirements.txt
+# appears, so this cannot drift silently.
+dependencies = []
+
+[project.urls]
+# TODO BEFORE PUBLICATION: replace with the real repository URL. CI fails while any
+# REPLACE-ME remains, so this cannot be published by accident.
+Homepage = "https://github.com/REPLACE-ME/bruhswer"
+Documentation = "https://github.com/REPLACE-ME/bruhswer/tree/main/docs"
+Issues = "https://github.com/REPLACE-ME/bruhswer/issues"
+Security = "https://github.com/REPLACE-ME/bruhswer/blob/main/SECURITY.md"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+package-dir = { "" = "bruhswer" }

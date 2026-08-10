@@ -1,0 +1,73 @@
+bruhswer - before you install
+=============================
+
+WHAT THIS INSTALLER DOES
+
+  * Copies bruhswer into your own user folder
+        %LOCALAPPDATA%\Programs\bruhswer
+  * Creates the shortcuts you tick on the next page. Nothing else.
+
+It does NOT need Administrator, and it does not ask for it.
+
+
+WHAT IT DELIBERATELY DOES NOT DO
+
+  * No Windows service, no scheduled task, no background updater
+  * No startup entry, no Run key, no auto-launch
+  * No localhost server and no listening port of any kind
+  * No drivers, no QEMU, no WSL, no Hyper-V, no redistributables
+  * It does not touch Defender, SmartScreen, or your firewall
+  * It changes no Windows setting outside its own install folder
+
+
+WHAT YOU NEED ALREADY INSTALLED
+
+  * Windows 10 or 11
+  * Python 3.11 or newer, with the "py" launcher
+  * Microsoft Edge
+
+The installer checks for both and stops with an explanation if either is missing,
+rather than installing something that cannot run.
+
+bruhswer is not bundled with its own Python. Doing that would add a second
+interpreter and a packaging toolchain to the trusted stack of a tool whose main
+argument is that it adds no new trust roots, and it would make what you install much
+harder to compare against the published source.
+
+
+ABOUT THE FIREWALL RULES
+
+bruhswer's network protection - blocking the browser from reaching your router and
+other devices on your network - is NOT applied by this installer. It needs
+Administrator, and it is a real change to your PC, so it stays a separate step you
+run knowingly and can reverse:
+
+    bruhswer-netpolicy.ps1 -Action apply
+    bruhswer-netpolicy.ps1 -Action status
+    bruhswer-netpolicy.ps1 -Action remove
+
+Until you run it, bruhswer will refuse to launch the browser and will tell you why.
+That is deliberate: it fails closed rather than starting up in a state it cannot
+verify.
+
+
+THIS RELEASE IS NOT CODE-SIGNED
+
+Windows SmartScreen will probably warn you about an unrecognised publisher. That
+warning is correct and you should take it seriously.
+
+There is no code-signing certificate for this project. Rather than self-sign and
+describe it as trusted publisher authentication - which would be misleading - the
+release is shipped unsigned and says so.
+
+Verify what you downloaded against the SHA-256 checksum published with the release
+before you install it.
+
+
+WHAT BRUHWSER IS NOT
+
+It is not a virtual machine. It does not make you anonymous. It does not stop
+malware. It reduces what a website can reach and learn, verifies what it can, and
+says NOT ENFORCEABLE or UNKNOWN about the rest.
+
+Full detail: SECURITY.md and docs\THREAT-MODEL.md, both installed alongside the app.

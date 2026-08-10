@@ -1,0 +1,250 @@
+name: CI
+
+# WHAT THIS WORKFLOW DOES AND, MORE IMPORTANTLY, DOES NOT DO
+#
+# bruhswer's load-bearing security claims are measured against a real Windows
+# firewall, a real Microsoft Edge, a real router and a real LAN. A GitHub-hosted
+# runner has none of those in a usable form: there is no second device to be blocked
+# from, no gateway worth probing, and the firewall state is not the user's.
+#
+# So this workflow deliberately runs the CI-SAFE subset only, and the job names say
+# so. It must never be possible to look at a green tick here and conclude that the
+# firewall enforcement, Host Guard remediation, download quarantine or localhost
+# measurements have been verified. They have not. They are Windows-local integration
+# tests, they are listed in docs/RELEASE-CANDIDATE.md, and they are run by hand on a
+# real machine before a release.
+#
+# Reporting coverage a runner cannot actually provide would be a false security
+# claim, and this project treats those as vulnerabilities rather than as marketing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-static:
+    name: CI-safe - unit tests and static security analysis
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Confirm there are no dependencies to install
+        shell: pwsh
+        run: |
+          # bruhswer is standard library only, on purpose: every package added is a
+          # package a user has to trust. Fail loudly if that ever stops being true
+          # silently.
+          if (Test-Path requirements.txt) {
+            Write-Error "requirements.txt appeared. bruhswer is standard-library only."
+            exit 1
+          }
+          python -c "import sys; print(sys.version)"
+
+      - name: Unit tests and static security analysis
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          # These are the suites that do not need the firewall, a browser or a LAN:
+          # the AST scans for dangerous primitives, the no-local-listener proof, URL
+          # refusal, filename sanitisation, session destruction and config sanity.
+          python bruhswer\tests\test_security.py
+
+      - name: Import every module
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          # Catches syntax errors and import cycles in modules the unit suite does
+          # not otherwise touch. Tkinter modules are imported but never realised.
+          python -c @"
+          import pathlib, importlib, sys
+          sys.path.insert(0, 'bruhswer')
+          failed = []
+          for p in pathlib.Path('bruhswer/app').rglob('*.py'):
+              name = str(p.with_suffix('')).replace('\\', '.').replace('/', '.')
+              name = name[len('bruhswer.'):]
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failed.append(f'{name}: {exc.__class__.__name__}: {exc}')
+          print('\n'.join(failed) if failed else 'all modules imported')
+          sys.exit(1 if failed else 0)
+          "@
+
+      - name: Entry points survive a redirected stdout
+        shell: pwsh
+        run: |
+          # REGRESSION. Printing the moai crashed with UnicodeEncodeError whenever
+          # stdout was a pipe rather than a console, because Python then picks the
+          # legacy ANSI codepage. On a runner stdout is ALWAYS a pipe, so this step
+          # would have failed before the fix - which is precisely why it is here.
+          # Note the absence of PYTHONIOENCODING: the application must handle it.
+          python bruhswer\bruhswer.py --check *> check-output.txt
+          $code = $LASTEXITCODE
+          Get-Content check-output.txt -TotalCount 3
+          # Edge and the firewall rules are absent on a runner, so a non-zero
+          # "launch blocked" verdict is the CORRECT outcome. Only a crash is a
+          # failure, so assert on the banner having been printed at all.
+          if (-not (Select-String -Path check-output.txt -Pattern 'BRUH CHECK' -Quiet)) {
+            Write-Error "--check did not produce its report; likely an encoding crash."
+            exit 1
+          }
+          Write-Host "--check ran to completion (exit $code, non-zero is expected here)"
+
+  hygiene:
+    name: CI-safe - repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: No secrets, no personal information, no machine-specific values
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+
+          echo "--- private key material ---"
+          if grep -rInE "BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY" \
+               --exclude-dir=.git . ; then
+            echo "::error::private key material committed"; fail=1
+          fi
+
+          echo "--- assigned credentials ---"
+          # Deliberately narrow: matches an assignment with a literal value, not the
+          # word "password" in prose. bruhswer's docs discuss credentials constantly
+          # and a loose pattern here would fire on every one of them and be muted.
+          if grep -rInE "(api[_-]?key|secret|password|passwd|token)[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_.-]{12,}[\"']" \
+               --include="*.py" --include="*.ps1" --include="*.toml" \
+               --include="*.yml" --include="*.json" --exclude-dir=.git . ; then
+            echo "::error::a credential appears to be assigned in source"; fail=1
+          fi
+
+          echo "--- developer machine paths ---"
+          if grep -rIn "C:\\\\Users\\\\" --include="*.py" --include="*.ps1" \
+               --include="*.md" --include="*.iss" --exclude-dir=.git . \
+               | grep -viE "youruser|<user>|%USERNAME%|username" ; then
+            echo "::error::an absolute developer path is committed"; fail=1
+          fi
+
+          echo "--- .env or profile data ---"
+          if git ls-files | grep -iE "(^|/)\.env$|(^|/)profiles/|(^|/)quarantine/" ; then
+            echo "::error::runtime or environment data is tracked"; fail=1
+          fi
+
+          exit $fail
+
+      - name: Required publication files are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in LICENSE README.md SECURITY.md .gitignore \
+                   docs/THREAT-MODEL.md docs/ARCHITECTURE.md docs/PRIVACY.md \
+                   docs/NETWORK-PRIVACY.md docs/DATA-INVENTORY.md \
+                   docs/RELEASE-CANDIDATE.md installer/bruhswer.iss ; do
+            if [ ! -f "$f" ]; then echo "::error::missing $f"; missing=1; fi
+          done
+          exit $missing
+
+      - name: No unfilled publication placeholders
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The repository URL appears in README install instructions and in the
+          # installer's support and update links. Publishing with the placeholder
+          # still in place ships an installer whose "support" button goes nowhere,
+          # so this fails the build until a real URL is set.
+          #
+          # Scoped to the files that carry a REAL url. docs/ is excluded on purpose:
+          # the release report and the review record DESCRIBE this placeholder as an
+          # outstanding item, and an unscoped grep would keep failing forever on the
+          # very documents that track the problem. A check that cannot ever go green
+          # gets disabled, and then it protects nothing.
+          if grep -In "REPLACE-ME" README.md pyproject.toml installer/bruhswer.iss ; then
+            echo "::error::Replace REPLACE-ME with the real repository URL in README.md, pyproject.toml and installer/bruhswer.iss before publishing."
+            exit 1
+          fi
+          echo "no placeholders remain in the files that carry real URLs"
+
+      - name: The licence is a real licence
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "Apache License" LICENSE
+          grep -q "Version 2.0, January 2004" LICENSE
+          # An unfilled boilerplate placeholder means nobody actually holds the
+          # copyright, which is worse than having no LICENSE at all.
+          if grep -q "\[yyyy\]\|\[name of copyright owner\]" LICENSE ; then
+            echo "::error::LICENSE still contains unfilled boilerplate"; exit 1
+          fi
+
+  installer-script:
+    name: CI-safe - installer script builds
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          # Compiling proves the script is valid and that every [Files] source it
+          # references actually exists in the repository. It does NOT prove the
+          # installer behaves correctly - install, launch and uninstall are tested
+          # by hand on a real Windows machine before a release, because a runner
+          # has no Edge, no user profile and nothing to uninstall from.
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\bruhswer.iss
+
+      - name: Publish the built installer for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: bruhswer-setup-unsigned
+          path: installer/Output/*.exe
+          if-no-files-found: error
+
+  not-covered-here:
+    name: NOT covered by CI - see docs/RELEASE-CANDIDATE.md
+    runs-on: ubuntu-latest
+    steps:
+      - name: State plainly what CI does not verify
+        run: |
+          cat <<'EOF'
+          The following are NOT tested by this workflow and a green tick above says
+          NOTHING about them. They are Windows-local integration tests, run by hand
+          on real hardware before a release:
+
+            * firewall enforcement (router and LAN blocked, internet still reachable)
+            * browser tamper-resistance against its own firewall rules
+            * the localhost attack-surface matrix
+            * download quarantine with a real browser performing a real download
+            * persistent and disposable session behaviour end to end
+            * Host Guard detection, remediation and rollback
+            * renderer sandbox measurement from live processes
+            * installer install / launch / uninstall on a real machine
+
+          Results for these live in docs/RELEASE-CANDIDATE.md, with the date and the
+          machine they were measured on.
+          EOF
