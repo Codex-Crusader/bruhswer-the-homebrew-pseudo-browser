@@ -4,6 +4,7 @@
 
 <p align="center">
   <strong>Browse the internet. Trust absolutely nothing.</strong>
+  <sub>(still in development)</sub>
 </p>
 
 <p align="center">
@@ -26,7 +27,7 @@
 
 ## 🗿 So what is this
 
-bruhswer is a hardened wrapper around Microsoft Edge for Windows.
+bruhswer is a hardened wrapper around Microsoft Edge for Windows. (i know a wrapper sounds bad but hear me out here)
 
 It gives the browser its own profile, blocks it from reaching your router and the
 other devices on your network, dumps every download into quarantine instead of your
