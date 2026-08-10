@@ -1,6 +1,6 @@
 # Architecture
 
-**Status: current.** This describes the code that ships in v0.9.1.
+**Status: current.** This describes the code that ships in v0.9.2.
 
 Earlier designs (WSL2, Hyper-V, QEMU) were built, measured, and rejected. They live in
 [`research/`](research/) as evidence and are not guidance. If you want the story of how

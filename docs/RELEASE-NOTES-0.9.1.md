@@ -61,12 +61,17 @@ The curtain came down the instant the window was reparented, so the frame appear
 and the page resized and repainted itself for the next 900ms. The stage is now revealed
 once, after the fit has settled, so bruhswer and Edge appear together.
 
-Hosting also waits for Chromium's compositor surface rather than a fixed delay.
-Measured on the development machine: the Edge window appears with its render widget
-already sized, but the `Intermediate D3D Window` does not exist until ~52ms later.
-Reparenting inside that gap produces a window that hosts successfully and then paints
-nothing - a blank stage under a `WE GOOD` status. That was reproduced during development
-and is what the gate exists to prevent.
+Hosting also waits for Chromium's compositor surface rather than trusting a clock alone.
+Measured: the Edge window appears with its render widget already sized, but the
+`Intermediate D3D Window` does not exist until ~52ms later.
+
+**That gate is defensive, and an earlier version of these notes overclaimed it.** They
+said reparenting inside that gap had been reproduced as the cause of a blank stage. It
+had not. Each host attempt already costs a ~258ms PowerShell round trip to find Edge's
+PIDs, which is five times the 52ms gap, so no poll interval can race it. A blank stage
+was genuinely seen during development, while several bruhswer instances were running at
+once, and **its cause is still unknown.** The gate is cheap and correct so it stays, but
+it is not a fix for a diagnosed defect and this file will not pretend otherwise.
 
 ### Smaller
 

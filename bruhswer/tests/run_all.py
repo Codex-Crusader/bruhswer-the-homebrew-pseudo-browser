@@ -85,10 +85,16 @@ def main() -> int:
         else:
             rows.append((label, "FAIL", elapsed))
             failures += 1
+            # BOTH streams. test_security.py runs unittest, which writes "FAIL: test_x"
+            # and its summary to STDERR, so a stdout-only scan concluded a perfectly
+            # ordinary assertion failure had "crashed" - replacing one misleading
+            # report with a different one.
             reported = 0
-            for line in (proc.stdout or "").splitlines():
-                if line.strip().startswith("FAILED:") or "[FAIL]" in line:
-                    print(f"    {line.strip()}")
+            for line in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines():
+                stripped = line.strip()
+                if (stripped.startswith(("FAILED:", "FAIL:", "FAILED ("))
+                        or "[FAIL]" in stripped):
+                    print(f"    {stripped}")
                     reported += 1
 
             # A suite that CRASHES fails without ever printing an assertion, and its

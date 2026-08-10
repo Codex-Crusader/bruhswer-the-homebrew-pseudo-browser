@@ -30,7 +30,7 @@
 ; explanation, if they are not.
 
 #define AppName        "bruhswer"
-#define AppVersion     "0.9.1"
+#define AppVersion     "0.9.2"
 ; Shown as the Publisher in Windows "Installed apps". Note this is NOT a code-signing
 ; identity and must not be read as one: the release is unsigned, and a publisher
 ; string in an installer is just a label anyone can type.
@@ -53,7 +53,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/blob/main/SECURITY.md
 AppUpdatesURL={#AppURL}/releases
-VersionInfoVersion=0.9.1.0
+VersionInfoVersion=0.9.2.0
 VersionInfoDescription=bruhswer - browse the internet, trust absolutely nothing
 
 ; Per-user install. No elevation prompt, no shared install location.

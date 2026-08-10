@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.9.1-F5C518?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.9.2-F5C518?style=flat-square">
   <img alt="status" src="https://img.shields.io/badge/status-research--grade%20beta-F5C518?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-333?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-151%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-152%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -93,7 +93,7 @@ the UI says so in the user's face rather than quietly rounding up.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | Measured platform boundaries - the honest part |
-| [`docs/TESTING.md`](docs/TESTING.md) | What the 151 assertions actually prove, and what they can't |
+| [`docs/TESTING.md`](docs/TESTING.md) | What the 152 assertions actually prove, and what they can't |
 | [`docs/SECURITY-TESTING.md`](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [`docs/research/`](docs/research/) | Three isolation backends built, measured and rejected. History, not guidance |
 
@@ -358,7 +358,7 @@ recorded rollback.
 <table>
 <tr><td>
 
-**151** assertions across **7** suites, all passing, run repeatedly, zero known
+**152** assertions across **7** suites, all passing, run repeatedly, zero known
 flaky tests. Against a real browser, a real firewall and a real network - not mocks.
 
 </td></tr>

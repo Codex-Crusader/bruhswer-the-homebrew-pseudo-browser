@@ -132,14 +132,19 @@ measurement: "browser can't undo it" now names the tested configuration, and
 
 ## Notes
 
-**This release was produced with substantial AI assistance, and one regression was
-introduced and caught during it.** While attempting to make startup feel faster, the
-fixed delay before hosting Edge's window was shortened from 1200ms to 250ms. That delay
-was load-bearing: it gives Chromium time to build its compositor surface, and
-reparenting inside that window produces a hosted browser that reports success and then
-paints nothing. It was caught by looking at the screen, not by the test suite, and it is
-the reason `is_paint_ready` now exists and the constant carries a "do not shorten this"
-comment.
+**This release was produced with substantial AI assistance, and it contained a false
+causal claim that was corrected in 0.9.2.** During the release the host delay was
+shortened from 1200ms to 250ms, a blank grey stage was seen shortly after, and the
+change was blamed and reverted. The attribution was never established. Measurement
+afterwards showed each host attempt costs a ~258ms PowerShell round trip against a
+~52ms compositor gap, so the race that was blamed cannot happen. The blank stage was
+real, it was seen while several bruhswer instances were running at once, and **its cause
+remains unknown.**
+
+The lesson is not about the timing constant. It is that a plausible mechanism was
+written into a code comment, a commit message, these notes and a public release page
+without once being reproduced - in a project whose stated rule is that an unverified
+claim is a defect.
 
 **Nothing in the suite would have caught it.** `test_browser_ui.py` asserts the window
 is hosted and that the OS confirms the parent relationship. It does not assert that the

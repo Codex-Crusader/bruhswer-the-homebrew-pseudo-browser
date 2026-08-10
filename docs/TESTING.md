@@ -1,6 +1,6 @@
 # Testing
 
-**151 assertions across 7 suites, 0 failures.**
+**152 assertions across 7 suites, 0 failures.**
 
 More usefully: what the tests actually establish, and what they deliberately do not.
 
@@ -31,7 +31,7 @@ More usefully: what the tests actually establish, and what they deliberately do 
 | `test_network_regression.py` | 10 | firewall policy | Rule scope, and the browser's own token failing to alter its rules |
 | `test_localhost_surface.py` | 18 | firewall policy | The 19-path loopback matrix, and that bruhswer's claims match what was measured |
 | `test_user_path.py` | 19 | firewall policy | The full user journey including a **real download** landing in quarantine |
-| `test_browser_ui.py` | 29 | firewall policy | Window, hosting, address bar, tabs, panels, session lifecycle |
+| `test_browser_ui.py` | 30 | firewall policy | Window, hosting, **that the hosted window actually paints**, address bar, tabs, panels, session lifecycle |
 
 ```powershell
 python tests\run_all.py            # everything, one verdict
@@ -106,6 +106,22 @@ And later, in this same pass:
 |---|---|
 | **Edge signs disposable profiles into the Microsoft account** and syncs favourites | Taking a screenshot for the README and reading the banner |
 | **`.gitignore` would have published a repo missing `quarantine.py`** | Running `git check-ignore` over the real file list. Two model reviews read the file and called it clean |
+
+And again in 0.9.1, which is the clearest example yet:
+
+| Defect | Why no test saw it |
+|---|---|
+| **The six status lights rendered behind the taskbar.** The entire honest-verdict display was off screen on a 1080p monitor | No test knows where the window is relative to the desktop |
+| **A completely blank browser passed every assertion.** The suite proved Edge's window was *parented*; nothing proved anything was *drawn* in it | "Hosted" was being read as "working" |
+
+The second one is now covered. `test_browser_ui.py` samples the hosted window's client
+area through GDI and fails if it finds fewer than 8 distinct colours - a blank surface
+is one or two, a real page is over a thousand. It was validated by confirming it reads
+~1,400 colours on a working build.
+
+**It has not been validated against a genuinely blank one**, because the blank state has
+never been reproduced on demand. It is a guard against a failure that was seen once and
+is not understood, not a regression test for a known defect.
 
 The principle this project takes from that:
 

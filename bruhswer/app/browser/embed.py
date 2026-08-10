@@ -308,11 +308,15 @@ def enable_dpi_awareness() -> str:
 def is_paint_ready(hwnd: int) -> bool:
     """True once Chromium has built the compositor surface for this window.
 
-    MEASURED, not guessed. On this machine the top-level window appears with its
-    render widget already present and already sized, but the "Intermediate D3D Window"
-    - the compositor surface - does not exist until about 50ms later. Reparenting in
-    that gap gives a window that hosts successfully and then paints nothing: a blank
-    stage under a "WE GOOD" status. That is what a 150ms host poll reproduced.
+    Measured on this machine: the top-level window appears with its render widget
+    already present and sized, but the "Intermediate D3D Window" - the compositor
+    surface - does not exist for another ~52ms.
+
+    This gate is DEFENSIVE, not a fix for a diagnosed bug. Reparenting inside that gap
+    is a plausible way to get a window that hosts successfully and paints nothing, but
+    it was never reproduced: each host attempt already costs a ~258ms PowerShell round
+    trip to find Edge's PIDs, so the gap cannot be hit by polling faster. The check is
+    cheap and correct, so it stays; it should not be cited as the cause of anything.
 
     Falls back to the render widget when there is no D3D surface at all, which is what
     software rendering looks like, so this can never block hosting forever.

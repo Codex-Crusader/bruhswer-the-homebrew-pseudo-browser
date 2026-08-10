@@ -16,11 +16,13 @@ called. Same rule as everywhere else in this project - verify the actual state.
 
 from __future__ import annotations
 
+import ctypes
 import http.server
 import shutil
 import sys
 import threading
 import time
+from ctypes import wintypes as wt
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +45,75 @@ _failed: list[str] = []
 def check(name: str, ok: bool, detail: str = "") -> None:
     (_passed if ok else _failed).append(name)
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  -  {detail}" if detail else ""))
+
+
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long), ("biPlanes", wt.WORD),
+                ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wt.DWORD),
+                ("biClrImportant", wt.DWORD)]
+
+
+class _BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BITMAPINFOHEADER), ("bmiColors", wt.DWORD * 3)]
+
+
+def _distinct_colours(hwnd: int | None, step: int = 17) -> int | None:
+    """Distinct colours sampled from a window's client area, or None if unreadable.
+
+    PrintWindow with PW_RENDERFULLCONTENT asks the window to draw itself into our DC,
+    so this reads what the window renders rather than what happens to be on top of it
+    on screen. That matters: a plain screen grab would pass or fail depending on which
+    window had focus when the suite ran.
+    """
+    if not hwnd:
+        return None
+    gdi = ctypes.windll.gdi32
+    rect = wt.RECT()
+    embed.USER32.GetClientRect(wt.HWND(hwnd), ctypes.byref(rect))
+    width, height = rect.right, rect.bottom
+    if width < 50 or height < 50:
+        return None
+
+    src = embed.USER32.GetWindowDC(wt.HWND(hwnd))
+    mem = gdi.CreateCompatibleDC(src)
+    bmp = gdi.CreateCompatibleBitmap(src, width, height)
+    previous = gdi.SelectObject(mem, bmp)
+    printed = embed.USER32.PrintWindow(wt.HWND(hwnd), mem, 0x00000002)  # FULLCONTENT
+
+    info = _BITMAPINFO()
+    info.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+    info.bmiHeader.biWidth = width
+    info.bmiHeader.biHeight = -height          # negative: top-down rows
+    info.bmiHeader.biPlanes = 1
+    info.bmiHeader.biBitCount = 32
+    info.bmiHeader.biCompression = 0           # BI_RGB
+    buf = ctypes.create_string_buffer(width * height * 4)
+    # GetDIBits requires the bitmap NOT be selected into a DC. Leaving it selected
+    # happens to work here, but when GDI does refuse it returns 0 and writes nothing -
+    # and a zero-filled buffer looks exactly like a blank window, which would fail this
+    # assertion for a browser that is painting perfectly.
+    gdi.SelectObject(mem, previous)
+    got = gdi.GetDIBits(mem, bmp, 0, height, buf, ctypes.byref(info), 0)
+
+    raw = buf.raw
+    seen = set()
+    for y in range(0, height, step):
+        row = y * width * 4
+        for x in range(0, width, step):
+            i = row + x * 4
+            seen.add(raw[i:i + 3])
+
+    gdi.DeleteObject(bmp)
+    gdi.DeleteDC(mem)
+    embed.USER32.ReleaseDC(wt.HWND(hwnd), src)
+    # None means "could not read", which is NOT the same as "blank" and must never be
+    # reported as a paint failure.
+    if not printed or not got:
+        return None
+    return len(seen)
 
 
 _hits: dict[str, int] = {"page": 0, "file": 0}
@@ -145,6 +216,25 @@ def main() -> int:
         check("session badge shows a session",
               "BRUH" in win.session_badge.cget("text"),
               win.session_badge.cget("text"))
+
+        # THE HOSTED WINDOW ACTUALLY PAINTS.
+        #
+        # Everything above proves the window is PARENTED. None of it proves anything is
+        # drawn in it. A completely blank grey stage - which was seen during development
+        # - passed every other assertion in this project, so "the browser is hosted" was
+        # never evidence that the user could see a page.
+        #
+        # Counts distinct colours sampled across the client area. A blank surface is one
+        # or two; a rendered page is hundreds. Threshold is deliberately far below what
+        # any real page produces, so it fails on "nothing rendered", not on "the page is
+        # plain". Stdlib only - GDI through ctypes, no new dependency.
+        colours = _distinct_colours(win.hosted_hwnd)
+        check("the hosted window actually paints something",
+              colours is not None and colours >= 8,
+              f"{colours} distinct colours sampled (blank would be 1-2)"
+              if colours is not None else
+              "COULD NOT READ the surface - this is UNKNOWN, not proof of a blank "
+              "window, but an unreadable check proves nothing and does not pass")
 
     print("\n2b. Renderer sandbox is MEASURED, not asserted")
     # This check used to be a hardcoded PASS quoting a measurement from one machine.

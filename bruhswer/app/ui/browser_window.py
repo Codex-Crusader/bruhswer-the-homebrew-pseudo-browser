@@ -233,8 +233,12 @@ class BrowserWindow:
             self.set_status("Kept the current session; no new session started.")
             return
 
-        if self.controller.is_running():
-            _stopped, message = self.controller.stop()
+        # Unconditionally, not "if is_running()". After the browser window closed on
+        # its own, is_running() is False while a disposable session's profile and
+        # quarantine are still on disk - so the old guard skipped the teardown the user
+        # had just confirmed. stop() early-returns on a None session, so this is safe.
+        _stopped, message = self.controller.stop()
+        if message:
             self.set_status(message)
         self.hosted_hwnd = None
         self._host_attempts = 0
@@ -255,11 +259,16 @@ class BrowserWindow:
 
         self.update_session_badge()
         self.set_status(outcome.message)
-        # DO NOT SHORTEN THIS. It is not a guess at how long Edge takes to appear, it
-        # is time for Chromium to finish building its compositor. Reparenting the
-        # window before then produces a hosted window that reports success and then
-        # paints nothing - a blank grey stage under a "WE GOOD" status. Tried at
-        # 250ms, reproduced immediately.
+        # Original value, restored after an experiment. It was shortened to 250ms and a
+        # blank grey stage under a "WE GOOD" status was seen shortly afterwards, so the
+        # change was blamed and reverted. That attribution was NOT established:
+        # find_browser_window costs a ~258ms PowerShell round trip per attempt, which is
+        # far longer than the ~52ms it takes Chromium's compositor to appear, so no poll
+        # interval can actually race it. The blank stage was seen while several bruhswer
+        # instances were running at once, and its cause is still unknown.
+        #
+        # 1200ms stays because it is the value the shipped, working builds have used,
+        # not because the alternative was proven bad.
         self.root.after(1200, self._try_host)
 
     def _try_host(self) -> None:
@@ -291,8 +300,11 @@ class BrowserWindow:
                 # once, onto a page that has already settled.
                 self._fit_hosted()
                 self.root.after(200, self._fit_hosted)
-                self.root.after(260, self._reveal_stage)
                 self.root.after(900, self._fit_hosted)
+                # AFTER the last fit, not before it. Revealing at 260ms left 640ms of
+                # Chromium repainting visible - the exact thing this was meant to stop,
+                # while a comment claimed the page had already settled.
+                self.root.after(950, self._reveal_stage)
                 self._watch_job = self.root.after(1500, self._watch)
                 return
 
@@ -388,24 +400,45 @@ class BrowserWindow:
 
         if self.hosted_hwnd and not embed.is_alive(self.hosted_hwnd):
             self.hosted_hwnd = None
+            # The controller must forget the handle too. Windows recycles handle
+            # values, so a stale one here means a later stop() can post WM_CLOSE to
+            # whatever unrelated window inherited the number.
+            self.controller.set_hosted_window(None)
             # The hosted WINDOW is gone. That is not the same fact as the browser
-            # having closed, and saying the wrong one is the SS34 failure: a session
-            # whose window was reparented or replaced is still running, still under
-            # policy, and still holding a profile. Ask before reporting.
+            # having closed: a session whose window was reparented or replaced is
+            # still running, still under policy, and still holding a profile.
+            #
+            # But is_running() is a ~258ms PowerShell snapshot, and on an ordinary
+            # close it is taken while Edge is still tearing down, so it will often
+            # still see processes. Reporting "still open and still protected" and
+            # then never asking again would latch exactly the kind of false
+            # reassurance this branch exists to avoid, so KEEP POLLING either way and
+            # let the message correct itself.
             if self.controller.is_running():
                 self._show_curtain(
                     "The browser is no longer inside bruhswer's frame.\n\n"
-                    "The session is still open and still protected - firewall policy,\n"
-                    "quarantine and session rules all still apply.",
+                    "Checking whether the session is still running...",
                     config.WARN_AMBER,
                     [("Bring it back", self._rehost),
                      ("Close the session", self.close_session)])
-                self.set_status("Session running, window not hosted")
+                self.set_status("Window not hosted; re-checking the session")
             else:
                 self._show_curtain("The browser window closed.", config.WARN_AMBER,
                                    [("New session", self._new_persistent)])
                 self.set_status("Browser closed")
             self.update_session_badge()
+            self._watch_job = self.root.after(1500, self._watch)
+            return
+
+        # No hosted window, but the poller is still alive: settle the message once the
+        # teardown snapshot is trustworthy rather than leaving the transient one up.
+        if self.hosted_hwnd is None and not self.controller.is_running():
+            if self.status_text.cget("text").startswith("Window not hosted"):
+                self._show_curtain("The browser window closed.", config.WARN_AMBER,
+                                   [("New session", self._new_persistent)])
+                self.set_status("Browser closed")
+                self.update_session_badge()
+            self._watch_job = self.root.after(1500, self._watch)
             return
         title = self.controller.browser_title()
         if title:

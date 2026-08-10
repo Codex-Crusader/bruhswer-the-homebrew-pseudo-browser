@@ -97,14 +97,28 @@ def _read_acl(profile_dir: Path) -> str:
 
 
 def _is_within(candidate: Path, ancestor: Path) -> bool:
-    """True if candidate is ancestor or sits under it. Lowered because Windows paths are
-    case-insensitive and is_relative_to is not."""
+    """True if candidate is ancestor or sits under it.
+
+    Both sides are resolved before comparison. Resolving only the candidate left an
+    asymmetry: if LOCALAPPDATA were an 8.3 short path, or AppData\\Local were redirected
+    through a junction, the two would never match and this critical check would PASS for
+    a profile that IS the user's real browser data. Lowered as well, because Windows
+    paths are case-insensitive and is_relative_to is not.
+    """
     try:
-        low = Path(str(candidate).lower())
-        return low == Path(str(ancestor).lower()) or low.is_relative_to(
-            Path(str(ancestor).lower()))
+        here = Path(str(_resolved(candidate)).lower())
+        there = Path(str(_resolved(ancestor)).lower())
+        return here == there or here.is_relative_to(there)
     except (OSError, ValueError):
         return False
+
+
+def _resolved(path: Path) -> Path:
+    """resolve() where possible, the original path where the filesystem refuses."""
+    try:
+        return path.resolve()
+    except (OSError, ValueError):
+        return path
 
 
 def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
