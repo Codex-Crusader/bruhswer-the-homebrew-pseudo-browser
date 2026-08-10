@@ -31,7 +31,15 @@
 
 #define AppName        "bruhswer"
 #define AppVersion     "0.9.0"
-#define AppPublisher   "The bruhswer authors"
+; Shown as the Publisher in Windows "Installed apps". Note this is NOT a code-signing
+; identity and must not be read as one: the release is unsigned, and a publisher
+; string in an installer is just a label anyone can type.
+;
+; v0.9.0 shipped with "The bruhswer authors" here. That published binary is left
+; exactly as it is - its SHA-256 is published and re-uploading a different file under
+; the same tag would silently invalidate a checksum someone may already have recorded.
+; This name takes effect from the next release.
+#define AppPublisher   "Bhargavaram Krishnapur"
 #define AppURL         "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser"
 #define AppExeName     "bruhswer.py"
 #define MinPython      "3.11"

@@ -20,6 +20,15 @@ If private reporting is not enabled or not available to you, open a public issue
 containing **only** the words "security report, please enable private advisories" and
 no technical detail. A maintainer will enable it and follow up.
 
+### Testing bruhswer
+
+If you are actively researching rather than reporting something you stumbled on, read
+**[docs/SECURITY-TESTING.md](docs/SECURITY-TESTING.md)** first. It has the trust
+boundary map, the list of places untrusted input enters, how to set up a test
+environment, a safe-harbour statement, a report template, and - importantly - a table
+of what is **already known** so you do not spend a weekend rediscovering a documented
+platform limitation.
+
 ### What to include
 
 - What you did, in enough detail to reproduce it
@@ -111,10 +120,14 @@ Stated plainly, because a security policy that only lists strengths is marketing
 
 Details of the model, what was measured, and what remains unverified:
 
+- [docs/SECURITY-TESTING.md](docs/SECURITY-TESTING.md) - for researchers: boundaries, setup, what is already known
 - [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/NETWORK-PRIVACY.md](docs/NETWORK-PRIVACY.md)
 - [docs/PRIVACY.md](docs/PRIVACY.md)
+- [docs/DATA-INVENTORY.md](docs/DATA-INVENTORY.md) - what is stored, and the encryption decision
+- [docs/CODEX-REVIEW-0.9.0.md](docs/CODEX-REVIEW-0.9.0.md) - the last independent review, with verdicts
+- [docs/ROADMAP.md](docs/ROADMAP.md) - what is planned, and what is deliberately refused
 
 ## No certifications
 

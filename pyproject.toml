@@ -3,6 +3,7 @@ name = "bruhswer"
 version = "0.9.0"
 description = "Browse the internet. Trust absolutely nothing. A hardened Microsoft Edge wrapper for Windows."
 requires-python = ">=3.11"
+authors = [{ name = "Bhargavaram Krishnapur" }]
 license = { file = "LICENSE" }
 readme = "README.md"
 keywords = ["security", "privacy", "browser", "windows", "edge"]

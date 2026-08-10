@@ -379,6 +379,18 @@ Issues and pull requests welcome. Two house rules, both non-negotiable:
 Found a security problem? **Don't open a public issue.** See
 [SECURITY.md](SECURITY.md) - use GitHub's private vulnerability reporting.
 
+### Security researchers
+
+There's a guide written for you: **[docs/SECURITY-TESTING.md](docs/SECURITY-TESTING.md)**.
+It has the trust-boundary map, every place untrusted input enters the code, how to set
+up and tear down a test environment, safe harbour, a report template - and a table of
+**what's already known**, so you don't spend a weekend rediscovering a documented
+platform limitation. It also lists things previously tried that didn't work, which is
+usually the part nobody writes down.
+
+Where the project is going, and what it refuses to do:
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
 ```powershell
 python tests\run_all.py    # the full suite (needs network policy applied)
 ```
