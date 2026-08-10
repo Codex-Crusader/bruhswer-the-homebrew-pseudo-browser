@@ -22,13 +22,15 @@ from ..host import host_guard
 from ..network import network_guard
 from ..privacy import privacy_guard
 from ..sessions import session_manager
-from ..verdict import Verdict
+from .panels import chrome
 
-_DOT = {Verdict.PASS: ("●", config.OK_GREEN),
-        Verdict.FAIL: ("●", config.BAD_RED),
-        Verdict.UNKNOWN: ("●", config.WARN_AMBER)}
-
-_WORD = {Verdict.PASS: "OK", Verdict.FAIL: "EXPOSED", Verdict.UNKNOWN: "UNKNOWN"}
+# Derived from panels.chrome, never restated. This module used to keep its own copy of
+# the verdict-to-colour and verdict-to-word maps, which meant the control panel and the
+# browser window could drift apart and show the same verdict two different ways. That
+# would be a rendering bug that reads to the user as a security statement, so there is
+# now one definition and everything else points at it.
+_DOT = {verdict: ("●", colour) for verdict, colour in chrome.COLOUR.items()}
+_WORD = chrome.WORD
 
 
 class BruhswerUI:
