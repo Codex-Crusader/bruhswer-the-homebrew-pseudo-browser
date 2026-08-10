@@ -118,7 +118,7 @@ The central question a Pro licence would let the project answer is stated in `HY
 
 ## 6a. Stage 4 - Windows application isolation, without a VM
 
-The machine had to stay on Windows 11 Home, so the fourth candidate abandoned virtualization entirely: Windows AppContainer as the OS-level boundary, Chromium's own sandbox beneath it, host-side firewall enforcement, encrypted DNS, and optional VPN. Documents: `STAGE-4-ARCHITECTURE.md`, `STAGE-4-THREAT-MODEL.md`, `STAGE-4-VERIFICATION.md`, `NETWORK-PRIVACY.md`.
+The machine had to stay on Windows 11 Home, so the fourth candidate abandoned virtualization entirely: Windows AppContainer as the OS-level boundary, Chromium's own sandbox beneath it, host-side firewall enforcement, encrypted DNS, and optional VPN. Documents: `research/STAGE-4-ARCHITECTURE.md`, `research/STAGE-4-THREAT-MODEL.md`, `research/STAGE-4-VERIFICATION.md`, `NETWORK-PRIVACY.md`.
 
 **The primary mechanism failed at the first substantive gate.** A2 measured that neither Edge nor Chrome survives inside a project-created AppContainer - Chrome dies on a Crashpad `CreateNamedPipe: Access is denied`, Edge faults reproducibly at ~8 s - and **`--no-sandbox` changes neither**, so it is not a conflict with Chromium's own sandbox. A trivial control program runs fine in the same container.
 

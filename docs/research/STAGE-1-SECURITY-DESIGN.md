@@ -9,13 +9,13 @@
 > time, and editing them would falsify the history they exist to preserve.
 >
 > For the CURRENT security policy and how to report a vulnerability, see
-> [`/SECURITY.md`](../SECURITY.md).
+> [`/SECURITY.md`](../../SECURITY.md).
 
 # Security - Privacy-First Disposable Browser
 
 **Status:** design only. No implementation code exists yet, so nothing here describes shipped behaviour.
 
-> **BACKEND SUPERSEDED - read this first.** This document was written at Stage 1, when the isolation backend was WSL2. **WSL2 was subsequently measured to fail (Stage 2: G1, G3, G8) and was rejected**, and its QEMU replacement was rejected on supply chain (B17). No backend is currently selected. §3 below therefore describes an architecture that **is no longer the plan**; it is retained unedited because §4 records what was measured against it. For the full chronology and the current position, read **[`PROJECT-HISTORY.md`](PROJECT-HISTORY.md)**.
+> **BACKEND SUPERSEDED - read this first.** This document was written at Stage 1, when the isolation backend was WSL2. **WSL2 was subsequently measured to fail (Stage 2: G1, G3, G8) and was rejected**, and its QEMU replacement was rejected on supply chain (B17). No backend is currently selected. §3 below therefore describes an architecture that **is no longer the plan**; it is retained unedited because §4 records what was measured against it. For the full chronology and the current position, read **[`PROJECT-HISTORY.md`](../PROJECT-HISTORY.md)**.
 
 This is the security entry point. It states the claims, the assumptions, and the things that are explicitly *not* claimed, and points to where each is developed in depth.
 

@@ -90,7 +90,7 @@ they are documented rather than hidden:
   hex address forms, the host's own LAN address, and via page-driven `fetch`, `POST`
   and WebSocket. bruhswer reports this as `NOT ENFORCEABLE` everywhere a user can see
   it, and a regression test fails if it is ever described as anything else. See
-  [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+  [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 - Vulnerabilities in Microsoft Edge or Chromium - report those to Microsoft.
 - Vulnerabilities in Windows itself - report those to Microsoft.
 - Anything requiring Administrator access you already have.
@@ -121,7 +121,7 @@ Stated plainly, because a security policy that only lists strengths is marketing
 Details of the model, what was measured, and what remains unverified:
 
 - [docs/SECURITY-TESTING.md](docs/SECURITY-TESTING.md) - for researchers: boundaries, setup, what is already known
-- [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)
+- [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/NETWORK-PRIVACY.md](docs/NETWORK-PRIVACY.md)
 - [docs/PRIVACY.md](docs/PRIVACY.md)

@@ -16,7 +16,7 @@ exactly one place each now, and this file points at them.
 |---|---|
 | What bruhswer is and does | [root README](../README.md) |
 | Current verified state, test counts, limitations | [docs/RELEASE-CANDIDATE.md](../docs/RELEASE-CANDIDATE.md) |
-| Threat model | [docs/THREAT-MODEL.md](../docs/THREAT-MODEL.md) |
+| Threat model | [docs/SECURITY-MODEL.md](../docs/SECURITY-MODEL.md) |
 | Architecture | [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) |
 | What is stored on disk, and encryption decisions | [docs/DATA-INVENTORY.md](../docs/DATA-INVENTORY.md) |
 | Network and privacy measurements | [docs/NETWORK-PRIVACY.md](../docs/NETWORK-PRIVACY.md) · [docs/PRIVACY.md](../docs/PRIVACY.md) |

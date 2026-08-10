@@ -8,7 +8,7 @@ never silently promoted to PASS, and every Check carries the evidence it was bas
 one that merely failed. Both are honest; they are different facts and the UI shows them
 differently. Example: Windows Firewall cannot filter loopback, so "browser cannot reach
 127.0.0.1" is a FAIL that no amount of configuration will fix. Measured in Stage 4 gate
-A16 -- see docs/STAGE-4-VERIFICATION.md.
+A16 -- see docs/research/STAGE-4-VERIFICATION.md.
 """
 
 from __future__ import annotations

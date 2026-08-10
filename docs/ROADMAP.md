@@ -124,18 +124,21 @@ that path has a regression test. Not covered:
 
 The principle stays: **never report a successful cleanup that did not happen.**
 
-### 8. Threat model, kept current
+### 8. Threat model, kept current - DONE for 0.9.0
 
-[`THREAT-MODEL.md`](THREAT-MODEL.md) exists and is detailed, but predates some of what
-has been measured since. It needs a pass to fold in the localhost matrix, the Edge
-sign-in limitation, and the installer as part of the security boundary. Ongoing, not a
-one-off.
+[`SECURITY-MODEL.md`](SECURITY-MODEL.md) is the current threat model, guarantees and
+verdict semantics, with [`LIMITATIONS.md`](LIMITATIONS.md) carrying the measured
+boundaries. The Stage-1 threat model that used to sit here described the rejected WSL2
+design and is now clearly filed under [`research/`](research/).
 
-### 9. Release checklist
+Remaining: this is upkeep, not a task. Every measurement that stops holding - an Edge
+change, a new gate result - has to land here, not only in a release note.
 
-Exists, at the end of [`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md). Wanted: lift it
-into a standalone document that is filled in per release and committed, so each release
-has its own signed-off record instead of one file being overwritten.
+### 9. Release checklist - DONE
+
+[`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) is a standalone template, filled in and
+committed per release, so each release keeps its own signed-off record instead of one
+file being overwritten.
 
 ### 10. Security disclosure process
 
@@ -146,6 +149,34 @@ and what is already known.
 
 Remaining: publish advisories through GitHub's advisory database when a fix ships, and
 keep a public record of findings that were accepted and declined, with reasons.
+
+### 11. A recorded demo
+
+The README has four screenshots. What it does not have is the thing that makes the
+project legible in thirty seconds: a recording of the controls actually holding, and
+one of them visibly not holding.
+
+It has to be a **real screen capture of a real session**. A rendered terminal animation
+of text nobody measured would be a fabricated verdict on the front page of a project
+whose entire argument is that verdicts must be measured, so that option is closed.
+
+Shot list, in order, roughly 30 seconds:
+
+| | Shot | What it has to show |
+|---|---|---|
+| 1 | Launch | The curtain, then verification running |
+| 2 | `BRUH CHECK` panel | Real verdicts, scrolled slowly enough to read |
+| 3 | Navigate to the router address | Blocked, from the browser's own error page |
+| 4 | Download a file | It appears in the quarantine panel, not in Downloads |
+| 5 | Close a disposable session | The deletion warning, then the profile gone |
+| 6 | The localhost row | `NOT ENFORCEABLE`, held on screen long enough to read |
+
+Shot 6 is the point of the whole recording. A demo that shows only the green lights
+would be the marketing page this project exists to argue against.
+
+Capture with Xbox Game Bar (`Win`+`Alt`+`R`) or any recorder, check the frames for
+personal data - real SSID, hostname, account name, favourites - before publishing, and
+put it in `docs/assets/`.
 
 ---
 

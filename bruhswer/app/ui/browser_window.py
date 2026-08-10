@@ -31,16 +31,23 @@ from .. import config
 from ..browser import embed
 from ..controller import controller as ctrl
 from ..downloads import quarantine
-from ..host import host_guard
-from ..network import network_guard
-from ..privacy import privacy_guard
 from ..sessions import session_manager
 from ..verdict import Verdict
+from . import dialogs
+from .panels import (
+    chrome,
+    host_panel,
+    network_panel,
+    privacy_panel,
+    quarantine_panel,
+    security_panel,
+)
 
-_COLOUR = {Verdict.PASS: config.OK_GREEN,
-           Verdict.FAIL: config.BAD_RED,
-           Verdict.UNKNOWN: config.WARN_AMBER}
-_WORD = {Verdict.PASS: "OK", Verdict.FAIL: "EXPOSED", Verdict.UNKNOWN: "UNKNOWN"}
+# Kept as module-level names because this window's own status lights use them. The
+# definitions live in panels.chrome so that every panel and this window render a
+# verdict identically - two colours for one verdict would read as a security claim.
+_COLOUR = chrome.COLOUR
+_WORD = chrome.WORD
 
 
 class BrowserWindow:
@@ -398,247 +405,43 @@ class BrowserWindow:
             ok, message = self.controller.stop()
             if not ok:
                 # Do not claim a clean exit that did not happen (SS34).
-                warn = tk.Toplevel(self.root)
-                warn.title("bruhswer")
-                warn.configure(bg=config.BG_DARK)
-                tk.Label(warn, text=f"{config.MOAI}  Session cleanup incomplete",
-                         font=("Segoe UI", 12, "bold"), bg=config.BG_DARK,
-                         fg=config.BAD_RED).pack(padx=20, pady=(18, 6))
-                tk.Label(warn, text=message, font=("Segoe UI", 10), wraplength=420,
-                         justify="left", bg=config.BG_DARK,
-                         fg=config.BRAND_WHITE).pack(padx=20, pady=(0, 14))
-                tk.Button(warn, text="Close anyway", bd=0, padx=16, pady=6,
-                          bg=config.BG_RAISED, fg=config.BRAND_WHITE, cursor="hand2",
-                          command=lambda: (warn.destroy(),
-                                           self.root.destroy())).pack(pady=(0, 18))
+                dialogs.cleanup_incomplete(self.root, message, self.root.destroy)
                 return
         self.root.destroy()
 
     # ------------------------------------------------------------------ panels
 
+    # Each opener does the same three things: refresh whatever state the panel needs,
+    # open the scrolling shell, hand both to the module that knows how to draw it.
+    # The drawing lives in panels/ so that this class stays about the window.
+
     def _panel(self, title: str, width: int = 640, height: int = 620) -> tk.Frame:
-        win = tk.Toplevel(self.root)
-        win.title(f"{config.MOAI} {title}")
-        win.configure(bg=config.BG_DARK)
-        win.geometry(f"{width}x{height}")
-        canvas = tk.Canvas(win, bg=config.BG_DARK, highlightthickness=0)
-        bar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
-        inner = tk.Frame(canvas, bg=config.BG_DARK)
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(window, width=e.width))
-        canvas.configure(yscrollcommand=bar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        bar.pack(side="right", fill="y")
-        return inner
-
-    @staticmethod
-    def _heading(parent, text) -> None:
-        tk.Label(parent, text=text.upper(), font=("Segoe UI", 9, "bold"),
-                 bg=config.BG_DARK, fg=config.FG_DIM, anchor="w").pack(
-            fill="x", padx=16, pady=(14, 5))
-
-    @staticmethod
-    def _line(parent, label, value, colour, note="") -> None:
-        row = tk.Frame(parent, bg=config.BG_DARK)
-        row.pack(fill="x", padx=16, pady=1)
-        tk.Label(row, text="●", font=("Segoe UI", 10), bg=config.BG_DARK,
-                 fg=colour).pack(side="left", padx=(0, 7))
-        tk.Label(row, text=label, font=("Segoe UI", 10), width=34, anchor="w",
-                 bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
-        tk.Label(row, text=value, font=("Consolas", 9), anchor="w",
-                 bg=config.BG_DARK, fg=colour).pack(side="left")
-        if note:
-            tk.Label(parent, text=note, font=("Segoe UI", 8), justify="left",
-                     wraplength=560, anchor="w", bg=config.BG_DARK,
-                     fg=config.FG_DIM).pack(fill="x", padx=(44, 16), pady=(0, 4))
+        return chrome.scroll_panel(self.root, title, width, height)
 
     def open_security_panel(self) -> None:
         self.result = self.controller.verify(
             self.controller.session.mode if self.controller.session
             else session_manager.PERSISTENT)
         self.refresh_lights()
-        body = self._panel("BRUH CHECK")
-
-        groups = [("Security  -  can something reach my stuff",
-                   ("edge", "browser", "net", "controller")),
-                  ("Privacy  -  what can a website learn",
-                   ("privacy", "dns", "downloads")),
-                  ("Host  -  what other devices on this network can reach", ("host",))]
-        for heading, prefixes in groups:
-            self._heading(body, heading)
-            for check in self.result.checks:
-                if check.check_id.split(".")[0] not in prefixes:
-                    continue
-                if not check.enforceable:
-                    self._line(body, check.title, "NOT ENFORCEABLE", config.WARN_AMBER,
-                               check.detail)
-                else:
-                    self._line(body, check.title, _WORD[check.verdict],
-                               _COLOUR[check.verdict], check.detail)
-
-        self._heading(body, "What bruhswer is not")
-        tk.Label(body,
-                 text="bruhswer is not a virtual machine and does not claim to be one. "
-                      "It does not stop a browser exploit, a Windows kernel bug, or a "
-                      "fully compromised PC. It reduces what a website can reach and "
-                      "learn, and it refuses to start when the controls it can check "
-                      "are missing.",
-                 font=("Segoe UI", 9), justify="left", wraplength=580, anchor="w",
-                 bg=config.BG_DARK, fg=config.FG_DIM).pack(fill="x", padx=16, pady=6)
+        security_panel.render(self._panel("BRUH CHECK"), self.result)
 
     def open_network_panel(self) -> None:
-        body = self._panel("Network")
-        self._heading(body, "What the browser may reach")
-        for label, state in network_guard.policy_summary():
-            colour = {"ALLOWED": config.FG_DIM, "BLOCKED": config.OK_GREEN,
-                      "NOT ENFORCEABLE": config.WARN_AMBER}[state]
-            self._line(body, label, state, colour)
-        self._heading(body, "DNS and VPN")
-        dns = [c for c in (self.result.checks if self.result else [])
-               if c.check_id.startswith("dns.")]
-        for check in dns:
-            self._line(body, check.title, _WORD[check.verdict],
-                       _COLOUR[check.verdict], check.detail)
-        self._line(body, "VPN", "UNSUPPORTED", config.OFF_GREY,
-                   "No VPN is configured and no kill switch has been demonstrated. "
-                   "bruhswer will not pretend to offer one.")
-        self._heading(body, "Note")
-        tk.Label(body, text=config.CAPTIVE_PORTAL_WARNING, font=("Segoe UI", 9),
-                 justify="left", wraplength=580, anchor="w", bg=config.BG_DARK,
-                 fg=config.FG_DIM).pack(fill="x", padx=16, pady=6)
+        network_panel.render(self._panel("Network"), self.result)
 
     def open_privacy_panel(self) -> None:
-        body = self._panel("Privacy")
-
-        # READ THE PROFILE BACK. This panel used to render every setting as a green
-        # "ON" purely because it appeared in privacy_guard.STANDARD - that is, it
-        # showed bruhswer's INTENTIONS and called them state. The project already
-        # knows that is wrong: privacy_guard.REJECTED documents two preferences
-        # Chromium deliberately reverts when they are written from outside, so
-        # "we wrote it" has never been evidence that it stuck.
-        #
-        # A green light nobody verified is the exact defect class this project
-        # treats as a vulnerability, so the panel now asks the profile.
         profile = (self.controller.session.profile_dir
                    if self.controller.session else config.PROFILE_PERSISTENT)
-        applied, expected, missing = privacy_guard.verify_applied(
-            profile, self.controller.privacy_mode)
-        not_applied = set(missing)
-        no_profile_yet = missing == [privacy_guard.NO_PROFILE_YET]
-
-        self._heading(body, "Measured against stock Edge")
-        # These four are findings from a specific comparison run, not live state.
-        # Labelled as a past measurement so they cannot be misread as "right now".
-        for label, value in (("Third-party cookies", "RESTRICTED"),
-                             ("Permissions", "CONSERVATIVE"),
-                             ("WebRTC local-IP exposure", "RESTRICTED")):
-            self._line(body, label, value, config.FG_DIM,
-                       "Result of a recorded comparison against stock Edge, not a "
-                       "live reading of this profile.")
-        self._line(body, "Fingerprint entropy", "NO INCREASE MEASURED", config.FG_DIM,
-                   "All 9 identity values measured (User-Agent, platform, languages, "
-                   "timezone, screen, CPU count, memory, canvas, WebGL) were identical "
-                   "to stock Edge. That means bruhswer adds no entropy. It does NOT "
-                   "mean you cannot be fingerprinted, and it is a past measurement, "
-                   "not a live check.")
-
-        self._heading(body, f"Settings in this profile  ({applied} of {expected} "
-                            f"confirmed present)")
-        if no_profile_yet:
-            tk.Label(body, text="No session has run yet, so there is no profile to "
-                                "read. These are written and re-verified when a "
-                                "session starts.",
-                     font=("Segoe UI", 9), justify="left", wraplength=580, anchor="w",
-                     bg=config.BG_DARK, fg=config.WARN_AMBER).pack(
-                fill="x", padx=16, pady=4)
-
-        for setting in privacy_guard.settings_for(self.controller.privacy_mode):
-            if no_profile_yet:
-                value, colour = "NOT YET WRITTEN", config.WARN_AMBER
-            elif setting.key in not_applied:
-                value, colour = "NOT APPLIED", config.BAD_RED
-            else:
-                value, colour = "CONFIRMED", config.OK_GREEN
-            self._line(body, setting.key, value, colour,
-                       f"Reduces: {setting.reduces}   |   Costs: {setting.costs}")
-        self._heading(body, "Things bruhswer refuses to do")
-        for name, why in privacy_guard.REJECTED:
-            tk.Label(body, text=f"• {name}\n   {why}", font=("Segoe UI", 9),
-                     justify="left", wraplength=580, anchor="w", bg=config.BG_DARK,
-                     fg=config.FG_DIM).pack(fill="x", padx=16, pady=3)
+        privacy_panel.render(self._panel("Privacy"), profile,
+                             self.controller.privacy_mode)
 
     def open_host_panel(self) -> None:
-        body = self._panel("Host Guard")
-        checks = host_guard.evaluate()
-        self._heading(body, "What other devices on this network can reach")
-        for check in checks:
-            self._line(body, check.title, _WORD[check.verdict],
-                       _COLOUR[check.verdict], check.detail)
-        fixes = host_guard.remediations(checks)
-        self._heading(body, "Suggested fixes")
-        if not fixes:
-            tk.Label(body, text="Nothing here needs your attention right now.",
-                     font=("Segoe UI", 9), bg=config.BG_DARK, fg=config.FG_DIM,
-                     anchor="w").pack(fill="x", padx=16)
-        for fix in fixes:
-            tk.Label(body, text=f"• {fix['title']}\n   Risk: {fix['risk']}\n"
-                                f"   Change: {fix['change']}\n   Undo: {fix['rollback']}",
-                     font=("Segoe UI", 9), justify="left", wraplength=580, anchor="w",
-                     bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(
-                fill="x", padx=16, pady=4)
-        tk.Label(body,
-                 text="Host-wide changes need Administrator and your explicit consent. "
-                      "bruhswer never makes them by itself, and nothing a webpage does "
-                      "can trigger them. Run:\n"
-                      "  tools\\bruhswer-hostguard.ps1 -Action plan\n"
-                      "  tools\\bruhswer-hostguard.ps1 -Action fix-sharing\n"
-                      "  tools\\bruhswer-hostguard.ps1 -Action revert",
-                 font=("Consolas", 8), justify="left", wraplength=580, anchor="w",
-                 bg=config.BG_DARK, fg=config.FG_DIM).pack(fill="x", padx=16, pady=10)
+        host_panel.render(self._panel("Host Guard"))
 
     def open_quarantine_panel(self) -> None:
-        body = self._panel("Quarantine", height=520)
         session_id = (self.controller.session.session_id
                       if self.controller.session else "preview")
-        self._heading(body, f"{config.MOAI} Quarantine")
-        tk.Label(body,
-                 text="Downloads land here instead of your Downloads folder. bruhswer "
-                      "does not run them and does not scan them - it cannot tell you a "
-                      "file is safe, only that it has not been let out.",
-                 font=("Segoe UI", 9), justify="left", wraplength=580, anchor="w",
-                 bg=config.BG_DARK, fg=config.FG_DIM).pack(fill="x", padx=16, pady=4)
-
-        items = quarantine.list_quarantine(session_id)
-        if not items:
-            tk.Label(body, text="Nothing in quarantine.", font=("Segoe UI", 10),
-                     bg=config.BG_DARK, fg=config.FG_DIM, anchor="w").pack(
-                fill="x", padx=16, pady=8)
-            return
-        for item in items:
-            card = tk.Frame(body, bg=config.BG_PANEL)
-            card.pack(fill="x", padx=16, pady=5)
-            tk.Label(card, text=item.display_name, font=("Consolas", 10), anchor="w",
-                     bg=config.BG_PANEL, fg=config.BRAND_WHITE).pack(
-                fill="x", padx=10, pady=(8, 0))
-            note = f"{item.size:,} bytes"
-            if item.is_executable_type:
-                note += "   -   this is a program. It is NOT being executed."
-            tk.Label(card, text=note, font=("Segoe UI", 8), anchor="w",
-                     bg=config.BG_PANEL,
-                     fg=config.WARN_AMBER if item.is_executable_type else config.FG_DIM
-                     ).pack(fill="x", padx=10)
-            buttons = tk.Frame(card, bg=config.BG_PANEL)
-            buttons.pack(fill="x", padx=10, pady=8)
-            tk.Button(buttons, text="Export...", bd=0, padx=12, pady=4,
-                      font=("Segoe UI", 9), bg=config.BG_RAISED,
-                      fg=config.BRAND_WHITE, cursor="hand2",
-                      command=lambda i=item: self._export(i)).pack(side="left")
-            tk.Button(buttons, text="Delete", bd=0, padx=12, pady=4,
-                      font=("Segoe UI", 9), bg=config.BG_RAISED,
-                      fg=config.BRAND_WHITE, cursor="hand2",
-                      command=lambda i=item: self._delete(i)).pack(side="left", padx=6)
+        quarantine_panel.render(self._panel("Quarantine", height=520), session_id,
+                                self._export, self._delete)
 
     def _export(self, item) -> None:
         target = filedialog.askdirectory(title="Export to which folder?")
@@ -687,11 +490,9 @@ class BrowserWindow:
     def _confirm_disposable_downloads(self) -> bool:
         """Ask before destroying downloads. Returns False if the user cancels.
 
-        Closing a disposable session now deletes that session's quarantine along with
-        its profile, which is what "disposable" has to mean. But deleting files a user
-        deliberately downloaded without telling them first is exactly the behaviour
-        this project criticises elsewhere, so they are told what is about to go and
-        given the chance to export it instead.
+        The window decides WHETHER to ask - only a disposable session with files
+        pending needs the question. The dialog itself lives in dialogs.py along with
+        the detach/re-attach rule its callers have to honour.
         """
         session = self.controller.session
         if session is None or not session.is_disposable:
@@ -699,43 +500,7 @@ class BrowserWindow:
         pending = session_manager.pending_quarantine(session)
         if not pending:
             return True
-
-        answer = {"go": False}
-        win = tk.Toplevel(self.root)
-        win.title(f"{config.MOAI} bruhswer")
-        win.configure(bg=config.BG_DARK)
-        win.transient(self.root)
-        win.grab_set()
-
-        tk.Label(win, text=f"{config.MOAI}  This will delete "
-                           f"{len(pending)} download(s)",
-                 font=("Segoe UI", 12, "bold"), bg=config.BG_DARK,
-                 fg=config.WARN_AMBER).pack(padx=22, pady=(18, 6))
-        names = "\n".join(f"  • {p.name}" for p in pending[:8])
-        if len(pending) > 8:
-            names += f"\n  ... and {len(pending) - 8} more"
-        tk.Label(win, text="This is a disposable session, so its quarantine is "
-                           "destroyed with it:\n\n" + names,
-                 font=("Segoe UI", 10), justify="left", wraplength=460,
-                 bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(padx=22, pady=(0, 4))
-        tk.Label(win, text="Export anything you want to keep first. bruhswer cannot "
-                           "get these back.",
-                 font=("Segoe UI", 9), justify="left", wraplength=460,
-                 bg=config.BG_DARK, fg=config.FG_DIM).pack(padx=22, pady=(0, 14))
-
-        row = tk.Frame(win, bg=config.BG_DARK)
-        row.pack(pady=(0, 18))
-        tk.Button(row, text="Keep the session open", bd=0, padx=16, pady=6,
-                  font=("Segoe UI", 10), bg=config.BG_RAISED, fg=config.BRAND_WHITE,
-                  cursor="hand2", command=win.destroy).pack(side="left", padx=6)
-        tk.Button(row, text="Close and delete", bd=0, padx=16, pady=6,
-                  font=("Segoe UI", 10), bg=config.BG_RAISED, fg=config.BAD_RED,
-                  cursor="hand2",
-                  command=lambda: (answer.__setitem__("go", True),
-                                   win.destroy())).pack(side="left", padx=6)
-
-        self.root.wait_window(win)
-        return answer["go"]
+        return dialogs.confirm_disposable_downloads(self.root, pending)
 
     def close_session(self) -> None:
         # detach BEFORE the modal dialog, re-attach if the user backs out. Same

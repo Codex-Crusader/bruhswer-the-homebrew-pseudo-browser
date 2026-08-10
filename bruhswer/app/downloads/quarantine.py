@@ -121,8 +121,15 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         return False, "Refused: that file is not inside quarantine."
 
     # A reparse point could redirect the read somewhere else entirely.
+    #
+    # PTH114 wants Path.is_symlink() here. It is left as os.path.islink on purpose:
+    # on Windows a junction is a reparse point that is NOT a symlink, so neither
+    # check alone is sufficient and the pair has to be read together. Keeping both
+    # halves at the os level keeps that visible. This project has already been bitten
+    # once by assuming POSIX symlink semantics on Windows; the fix is not worth
+    # re-litigating for a style rule.
     try:
-        if os.path.islink(item.path) or (item.path.stat().st_file_attributes & 0x400):
+        if os.path.islink(item.path) or (item.path.stat().st_file_attributes & 0x400):  # noqa: PTH114
             return False, "Refused: quarantined item is a link or reparse point."
     except (OSError, AttributeError):
         pass

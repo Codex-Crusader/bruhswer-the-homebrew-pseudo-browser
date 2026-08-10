@@ -1,0 +1,84 @@
+"""Modal confirmations.
+
+Both dialogs here exist to stop bruhswer claiming something it did not do: one before
+files are destroyed, one after a cleanup that did not finish. They are separated from
+the window because a modal grab is a fiddly thing with a hard rule attached - see the
+warning below - and burying that rule inside a 750-line class is how it gets forgotten.
+
+THE RULE: every caller must have released the shared input queue (embed.detach_input)
+BEFORE showing anything here, and must re-attach it if the user backs out. A modal Tk
+grab while two GUI threads share an input queue is how you get a hung window.
+"""
+
+from __future__ import annotations
+
+import tkinter as tk
+
+from .. import config
+
+
+def confirm_disposable_downloads(root: tk.Misc, pending: list) -> bool:
+    """Ask before destroying downloads. Returns False if the user cancels.
+
+    Closing a disposable session deletes that session's quarantine along with its
+    profile, which is what "disposable" has to mean. But deleting files a user
+    deliberately downloaded without telling them first is exactly the behaviour this
+    project criticises elsewhere, so they are told what is about to go and given the
+    chance to export it instead.
+    """
+    answer = {"go": False}
+    win = tk.Toplevel(root)
+    win.title(f"{config.MOAI} bruhswer")
+    win.configure(bg=config.BG_DARK)
+    win.transient(root)
+    win.grab_set()
+
+    tk.Label(win, text=f"{config.MOAI}  This will delete {len(pending)} download(s)",
+             font=("Segoe UI", 12, "bold"), bg=config.BG_DARK,
+             fg=config.WARN_AMBER).pack(padx=22, pady=(18, 6))
+
+    names = "\n".join(f"  • {p.name}" for p in pending[:8])
+    if len(pending) > 8:
+        names += f"\n  ... and {len(pending) - 8} more"
+    tk.Label(win, text="This is a disposable session, so its quarantine is destroyed "
+                       "with it:\n\n" + names,
+             font=("Segoe UI", 10), justify="left", wraplength=460,
+             bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(padx=22, pady=(0, 4))
+    tk.Label(win, text="Export anything you want to keep first. bruhswer cannot get "
+                       "these back.",
+             font=("Segoe UI", 9), justify="left", wraplength=460,
+             bg=config.BG_DARK, fg=config.FG_DIM).pack(padx=22, pady=(0, 14))
+
+    row = tk.Frame(win, bg=config.BG_DARK)
+    row.pack(pady=(0, 18))
+    tk.Button(row, text="Keep the session open", bd=0, padx=16, pady=6,
+              font=("Segoe UI", 10), bg=config.BG_RAISED, fg=config.BRAND_WHITE,
+              cursor="hand2", command=win.destroy).pack(side="left", padx=6)
+    tk.Button(row, text="Close and delete", bd=0, padx=16, pady=6,
+              font=("Segoe UI", 10), bg=config.BG_RAISED, fg=config.BAD_RED,
+              cursor="hand2",
+              command=lambda: (answer.__setitem__("go", True),
+                               win.destroy())).pack(side="left", padx=6)
+
+    root.wait_window(win)
+    return answer["go"]
+
+
+def cleanup_incomplete(root: tk.Misc, message: str, on_close_anyway) -> None:
+    """Report a session teardown that did not fully succeed.
+
+    Never claim a clean exit that did not happen (SS34). The user can still close, but
+    not without being told what was left behind.
+    """
+    warn = tk.Toplevel(root)
+    warn.title("bruhswer")
+    warn.configure(bg=config.BG_DARK)
+    tk.Label(warn, text=f"{config.MOAI}  Session cleanup incomplete",
+             font=("Segoe UI", 12, "bold"), bg=config.BG_DARK,
+             fg=config.BAD_RED).pack(padx=20, pady=(18, 6))
+    tk.Label(warn, text=message, font=("Segoe UI", 10), wraplength=420,
+             justify="left", bg=config.BG_DARK,
+             fg=config.BRAND_WHITE).pack(padx=20, pady=(0, 14))
+    tk.Button(warn, text="Close anyway", bd=0, padx=16, pady=6,
+              bg=config.BG_RAISED, fg=config.BRAND_WHITE, cursor="hand2",
+              command=lambda: (warn.destroy(), on_close_anyway())).pack(pady=(0, 18))

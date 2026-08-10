@@ -67,7 +67,7 @@ def main() -> int:
 
     # Start from a clean slate so the result is unambiguous.
     if config.PROFILE_PERSISTENT.exists():
-        print(f"\n[setup] removing existing persistent profile for a clean test")
+        print("\n[setup] removing existing persistent profile for a clean test")
         shutil.rmtree(config.PROFILE_PERSISTENT, ignore_errors=True)
 
     controller = ctrl.Controller()

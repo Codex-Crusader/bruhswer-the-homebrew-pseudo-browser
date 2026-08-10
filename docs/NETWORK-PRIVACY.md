@@ -1,6 +1,6 @@
 # Network Privacy - what is protected, what is not, and what is merely unknown
 
-**Date:** 2026-08-09 · Evidence: `STAGE-4-VERIFICATION.md` gates A10-A24, A34.
+**Date:** 2026-08-09 · Evidence: `research/STAGE-4-VERIFICATION.md` gates A10-A24, A34.
 **Measured on:** SSID `CampusWiFi`, network category **Public**, host `10.0.0.50/22`, gateway `10.0.0.1`, IPv6 connectivity `NoTraffic`.
 
 This document covers three different problems that must not be collapsed into one: what the **browser** can reach (Threat Model A), what the **network operator** can see (B), and what **other devices on the Wi-Fi** can reach on this machine (C).

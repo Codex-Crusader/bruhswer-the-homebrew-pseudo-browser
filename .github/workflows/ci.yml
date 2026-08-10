@@ -114,6 +114,32 @@ jobs:
           # what this step actually tests: that the report was printed at all.
           exit 0
 
+  lint:
+    name: CI-safe - lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Ruff
+        shell: bash
+        run: |
+          # Ruff is a DEVELOPMENT tool installed by this job only. It is never
+          # imported by the application and does not appear in [project.dependencies],
+          # so the standard-library-only rule still holds. Pinned, because an
+          # unpinned linter turns someone else's release into a red build here.
+          #
+          # This step says nothing about whether bruhswer is secure. It catches dead
+          # imports and obvious bug shapes. The security properties are measured by
+          # test_security.py and, for the rest, by hand on real hardware.
+          pip install "ruff==0.16.2"
+          ruff check --output-format=github .
+
   hygiene:
     name: CI-safe - repository hygiene
     runs-on: ubuntu-latest
@@ -168,13 +194,54 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
+          # The CURRENT documentation set. Historical investigations live in
+          # docs/research/ and are deliberately NOT listed here: they are evidence,
+          # they are finished, and nothing should fail a build because an archived
+          # document was archived. This list broke once when the research move
+          # renamed docs/THREAT-MODEL.md, which is exactly what it is here to catch.
           for f in LICENSE README.md SECURITY.md .gitignore \
-                   docs/THREAT-MODEL.md docs/ARCHITECTURE.md docs/PRIVACY.md \
-                   docs/NETWORK-PRIVACY.md docs/DATA-INVENTORY.md \
-                   docs/RELEASE-CANDIDATE.md installer/bruhswer.iss ; do
+                   docs/ARCHITECTURE.md docs/SECURITY-MODEL.md \
+                   docs/LIMITATIONS.md docs/TESTING.md \
+                   docs/PRIVACY.md docs/NETWORK-PRIVACY.md \
+                   docs/DATA-INVENTORY.md docs/RELEASE-CANDIDATE.md \
+                   docs/RELEASE-CHECKLIST.md docs/research/README.md \
+                   installer/bruhswer.iss ; do
             if [ ! -f "$f" ]; then echo "::error::missing $f"; missing=1; fi
           done
           exit $missing
+
+      - name: No document links to a file that does not exist
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The research move rewrote links across nine files by hand. A broken
+          # relative link is the failure mode that move has, so check it mechanically
+          # rather than trusting that the sweep caught everything.
+          python3 - <<'PY'
+          import pathlib, re, sys
+          link = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
+          bad = []
+          for p in pathlib.Path('.').rglob('*.md'):
+              if '.git' in p.parts:
+                  continue
+              for target in link.findall(p.read_text(encoding='utf-8')):
+                  if target.startswith(('http://', 'https://', '#', 'mailto:')):
+                      continue
+                  target = target.split('#')[0].strip()
+                  if not target:
+                      continue
+                  resolved = (p.parent / target).resolve()
+                  # ../../releases and friends are GitHub's own relative shorthand.
+                  # They resolve on github.com and cannot resolve on disk, so a
+                  # target outside the repository is out of scope, not broken.
+                  if pathlib.Path.cwd() not in resolved.parents and resolved != pathlib.Path.cwd():
+                      continue
+                  if not resolved.exists():
+                      bad.append(f'{p}: {target}')
+          print('\n'.join(f'::error::broken link {b}' for b in bad) if bad
+                else 'every relative documentation link resolves')
+          sys.exit(1 if bad else 0)
+          PY
 
       - name: No unfilled publication placeholders
         shell: bash

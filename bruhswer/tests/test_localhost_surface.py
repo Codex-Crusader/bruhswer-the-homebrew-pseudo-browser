@@ -79,7 +79,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 import _env  # noqa: E402
-from app import config, sysquery  # noqa: E402
+from app import config  # noqa: E402
 from app.browser import edge, urls  # noqa: E402
 from app.controller import controller as ctrl  # noqa: E402
 from app.network import network_guard  # noqa: E402
@@ -679,7 +679,7 @@ def main() -> int:
 
     print("\n" + "=" * 74)
     print("MEASURED REACHABILITY")
-    for target, verdict, detail in _findings:
+    for target, verdict, _detail in _findings:
         print(f"  {verdict:<16} {target}")
 
     unenforceable = sum(1 for _, v, _ in _findings if v == "NOT ENFORCEABLE")

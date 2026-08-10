@@ -1,12 +1,49 @@
+# bruhswer project metadata and tool configuration.
+#
+# THIS FILE DOES NOT BUILD A PYTHON DISTRIBUTION, AND THAT IS DELIBERATE.
+#
+# It used to declare a setuptools build backend with:
+#
+#     [tool.setuptools]
+#     packages = ["app"]
+#     package-dir = { "" = "bruhswer" }
+#
+# which was broken in two separate ways, both found by actually running
+# `pip wheel .` instead of reading the file:
+#
+#   1. `packages = ["app"]` names ONE package. It does not recurse. The resulting
+#      wheel contained five top-level modules and silently omitted every
+#      subpackage - browser, controller, downloads, host, network, privacy,
+#      security, sessions, ui. That is nine of the ten packages in the
+#      application, including every security guard. Anyone installing that wheel
+#      got something that could not import.
+#
+#   2. Fixing the discovery would have made it WORSE, not better. The wheel's
+#      top_level.txt read `app`, so a correct build would install a package
+#      literally named `app` into site-packages - squatting one of the most
+#      generic importable names there is, where it can shadow or be shadowed by
+#      anything else in the environment. Renaming to `bruhswer.app` would touch
+#      every import in the codebase for a distribution channel that does not
+#      exist.
+#
+# bruhswer is a Windows GUI APPLICATION, not a library. It is not on PyPI, it has
+# no console entry point, nothing imports it, and it is distributed two ways:
+# the Inno Setup installer, or `python bruhswer.py` from a clone. So the build
+# backend is gone rather than papered over.
+#
+# If bruhswer ever needs to be importable, the correct fix is the rename to a
+# `bruhswer.` namespace plus a real entry point - not a find-packages line that
+# makes a broken wheel build successfully.
+
 [project]
 name = "bruhswer"
 version = "0.9.0"
-description = "Browse the internet. Trust absolutely nothing. A hardened Microsoft Edge wrapper for Windows."
+description = "A measured, fail-closed security wrapper around Microsoft Edge on Windows."
 requires-python = ">=3.11"
 authors = [{ name = "Bhargavaram Krishnapur" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-keywords = ["security", "privacy", "browser", "windows", "edge"]
+keywords = ["security", "privacy", "browser", "windows", "edge", "hardening"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Win32 (MS Windows)",
@@ -16,14 +53,15 @@ classifiers = [
     "Operating System :: Microsoft :: Windows :: Windows 11",
     "Programming Language :: Python :: 3.11",
     "Topic :: Security",
+    "Private :: Do Not Upload",
 ]
 
 # EMPTY, AND IT STAYS EMPTY.
 #
-# bruhswer uses the Python standard library only. That is a security decision, not an
-# accident of scope: every package added here is a package the user has to trust, and
-# a browser-hardening tool that quietly pulls in a dependency tree has given away the
-# argument it is making. The CI workflow fails the build if a requirements.txt
+# bruhswer uses the Python standard library only. That is a security decision, not
+# an accident of scope: every package added here is a package the user has to
+# trust, and a browser-hardening tool that quietly pulls in a dependency tree has
+# given away the argument it is making. CI fails the build if a requirements.txt
 # appears, so this cannot drift silently.
 dependencies = []
 
@@ -33,10 +71,49 @@ Documentation = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-
 Issues = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/issues"
 Security = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/blob/main/SECURITY.md"
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+# --- linting ---------------------------------------------------------------------
+# Ruff is a DEVELOPMENT tool. It is configured here and run in CI; it is never
+# imported by the application and is not a runtime dependency.
 
-[tool.setuptools]
-packages = ["app"]
-package-dir = { "" = "bruhswer" }
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+extend-exclude = [".venv", "tools/stage2", "tools/stage4", "tools/stage25"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle
+    "F",      # pyflakes
+    "W",      # warnings
+    "B",      # bugbear: likely bugs
+    "S",      # bandit: security
+    "PTH",    # prefer pathlib
+    "RUF",    # ruff-specific
+]
+# Every entry below is a rule this project has looked at and disagreed with FOR A
+# STATED REASON. None of them is here because the finding was inconvenient. A lint
+# config full of silent suppressions is the same defect class as a green light
+# nobody verified, so if a reason stops being true the ignore has to go with it.
+ignore = [
+    "S404",   # importing subprocess is the point; every call site is audited
+    "S603",   # subprocess call - every one uses an argv list, never shell=True,
+              # and test_security.py enforces both with AST checks
+    "S607",   # partial executable path - bruhswer uses absolute paths from
+              # config; this fires on test helpers only
+    "E501",   # line length is handled by the formatter, not the linter
+    "S105",   # "hardcoded password". Fires on `PASS = "PASS"` in the Verdict enum,
+              # which is the project's core vocabulary, not a credential
+    "RUF100", # "unused noqa". The E402 markers guard imports that follow a
+              # sys.path insert. Ruff happens not to flag those; flake8 does, and
+              # stripping the markers to satisfy one linter would break the other
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately contain hostile strings, hardcoded probe values and asserts.
+# S324: the WebSocket handshake probe uses SHA-1 because RFC 6455 specifies SHA-1.
+# It is a protocol constant, not a choice of hash, and nothing is authenticated
+# with it. RUF012: the AST-visitor classes hold frozen name sets as class-level
+# constants on purpose - annotating them ClassVar buys nothing.
+"bruhswer/tests/*" = ["S101", "S104", "S105", "S106", "S310", "S324", "B017",
+                      "RUF012", "PTH118"]
+"bruhswer/tools/*" = ["S101", "S310"]

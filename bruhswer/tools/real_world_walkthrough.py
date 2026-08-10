@@ -21,7 +21,6 @@ sys.path.insert(0, str(ROOT))
 
 import tkinter as tk  # noqa: E402
 
-from app import config  # noqa: E402
 from app.downloads import quarantine  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
 from app.ui.browser_window import BrowserWindow  # noqa: E402

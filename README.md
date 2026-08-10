@@ -3,22 +3,29 @@
 </p>
 
 <p align="center">
-  <strong>Browse the internet. Trust absolutely nothing.</strong>
-  <sub>(still in development)</sub>
+  <strong>A measured, fail-closed security wrapper around Microsoft Edge on Windows.</strong>
+</p>
+
+<p align="center">
+  <sub>Browse the internet. Trust absolutely nothing - including this.</sub>
 </p>
 
 <p align="center">
   <a href="#what-it-actually-does">What it does</a> ·
-  <a href="#what-it-does-not-do">What it doesn't</a> ·
-  <a href="#install">Install</a> ·
-  <a href="#the-honest-bit">The honest bit</a> ·
-  <a href="SECURITY.md">Security</a>
+  <a href="#what-it-does-not-do">What it can't</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="docs/SECURITY-MODEL.md">Security model</a> ·
+  <a href="docs/LIMITATIONS.md">Limitations</a> ·
+  <a href="docs/TESTING.md">Testing</a> ·
+  <a href="#install">Install</a>
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.9.0%20(pre--1.0)-F5C518?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.9.0-F5C518?style=flat-square">
+  <img alt="status" src="https://img.shields.io/badge/status-research--grade%20beta-F5C518?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-333?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
+  <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
   <img alt="tests" src="https://img.shields.io/badge/tests-146%20passing-3FB950?style=flat-square">
 </p>
@@ -27,27 +34,43 @@
 
 ## 🗿 So what is this
 
-bruhswer is a hardened wrapper around Microsoft Edge for Windows. (i know a wrapper sounds bad but hear me out here)
+bruhswer runs Microsoft Edge inside a set of controls it **verifies before it will let
+the browser start**, and refuses to launch if any of them cannot be proved. (it's a
+wrapper. i know a wrapper sounds bad but hear me out here)
 
-It gives the browser its own profile, blocks it from reaching your router and the
-other devices on your network, dumps every download into quarantine instead of your
-Downloads folder, and **refuses to start at all** if it cannot verify that those
-controls are actually in place.
+|  |  |
+|---|---|
+| **What it is** | One unelevated Python process that launches Edge, hosts Edge's real window in its own frame, and measures a fixed set of security properties on every launch |
+| **What it protects** | Your router and LAN from the browser · your Downloads folder from downloads · your Edge profile from persisting when you didn't ask it to · your PC from bruhswer itself, which has no network client and no listener |
+| **How** | A program-scoped Windows Firewall rule, a confined profile with real ACL probes, a quarantine directory, and a single fail-closed decision point that will not accept `UNKNOWN` as `PASS` |
+| **What it can't** | Filter loopback - Windows Firewall does not. Sandbox the browser process. Isolate anything in a VM. Make you anonymous. It reports each of these as `NOT ENFORCEABLE` rather than showing green ([the full list](docs/LIMITATIONS.md)) |
 
-Then it tells you, in plain words, exactly which of its promises it can keep and
-which it can't.
-
-That last part is the whole point. Plenty of tools show you a green padlock. This one
-will tell you `NOT ENFORCEABLE` to your face.
+It is **not** a secure browser, a VM, a sandbox or a privacy product, and it never
+claims to be any of them.
 
 ### Why it exists
 
 Because "secure browser" usually means a normal browser with a marketing page.
 
 The interesting question isn't *"is it secure?"* - that's unanswerable. It's
-**"which specific things did you actually verify, and how?"** bruhswer is an attempt
-to answer that honestly for one platform, and to make the code fail loudly when the
-answer changes.
+**"which specific things did you actually verify, and how?"**
+
+> **If I can't prove it, the software says `UNKNOWN`.**
+
+That rule is the whole project. Every green light in bruhswer traces to a measurement
+taken on the running system, and where the measurement says the control does not hold,
+the UI says so in the user's face rather than quietly rounding up.
+
+### Where to look
+
+| | |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
+| [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
+| [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | Measured platform boundaries - the honest part |
+| [`docs/TESTING.md`](docs/TESTING.md) | What the 146 assertions actually prove, and what they can't |
+| [`docs/SECURITY-TESTING.md`](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
+| [`docs/research/`](docs/research/) | Three isolation backends built, measured and rejected. History, not guidance |
 
 ---
 
@@ -191,6 +214,27 @@ And the rest, plainly:
 
 ---
 
+## Release status
+
+**v0.9.0 - research-grade beta. Deliberately, not accidentally.**
+
+The controls it claims are measured and the suite passes. What keeps it below `1.0.0`
+is not unfinished code, it is unfinished *evidence*:
+
+| Blocking 1.0.0 | Why it matters |
+|---|---|
+| Releases are unsigned | No code-signing certificate exists, and self-signing one to look official would be the exact behaviour this project exists to complain about |
+| Builds are not reproducible | You cannot currently verify that the published installer was built from the published source |
+| No third-party audit | Every measurement here was taken by the author. That is a real limitation of the evidence, not a formality |
+| Edge-version compatibility is untested | Its guarantees rest on Edge internals that Microsoft can change without notice |
+
+Until those close, treat bruhswer as a security *research* tool that happens to be
+usable daily, not as a product you should stake anything on. The
+[roadmap](docs/ROADMAP.md) tracks each item, and the
+[release checklist](docs/RELEASE-CHECKLIST.md) is what every release has to survive.
+
+---
+
 ## Install
 
 ### The easy way
@@ -327,7 +371,9 @@ Some things this project found in its *own* code, and fixed:
 Each one was a green light nobody had verified. That's the defect class this project
 treats as a vulnerability - including in itself.
 
-**Full detail:** [THREAT-MODEL.md](docs/THREAT-MODEL.md) ·
+**Full detail:** [SECURITY-MODEL.md](docs/SECURITY-MODEL.md) ·
+[LIMITATIONS.md](docs/LIMITATIONS.md) ·
+[TESTING.md](docs/TESTING.md) ·
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
 [NETWORK-PRIVACY.md](docs/NETWORK-PRIVACY.md) ·
 [DATA-INVENTORY.md](docs/DATA-INVENTORY.md) ·
