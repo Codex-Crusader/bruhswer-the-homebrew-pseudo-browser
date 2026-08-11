@@ -442,7 +442,7 @@ class BrowserWindow:
             return
         title = self.controller.browser_title()
         if title:
-            clean = title.replace(" - Microsoft​ Edge", "").replace(
+            clean = title.replace(" - Microsoft Edge", "").replace(
                 " - Microsoft Edge", "")
             self.status_text.config(text=clean[:90])
         self._watch_job = self.root.after(1500, self._watch)
