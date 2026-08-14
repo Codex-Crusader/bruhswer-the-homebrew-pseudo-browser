@@ -30,6 +30,12 @@ _log = get_logger("privacy")
 # tell "not applied yet" apart from "applied and did not stick".
 NO_PROFILE_YET = "<no session has run yet>"
 
+# Sentinel for "the Preferences file exists but could not be parsed". Distinct from the
+# above, and distinct from a clean read, because those are three different facts and
+# collapsing any two of them is how this module produced a green light it had not
+# earned - see verify_account_signin.
+PREFS_UNREADABLE = "<preferences unreadable>"
+
 
 @dataclass(frozen=True)
 class PrivacySetting:
@@ -291,7 +297,17 @@ def verify_account_signin(profile_dir: Path) -> tuple[bool, str]:
     try:
         prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False, "Preferences unreadable"
+        # SENTINEL, not a bare False. Returning ("Preferences unreadable") meant
+        # "could not read the file" reached the caller as the same (False, ...) shape
+        # as "read it, found no account" - and _privacy_checks turned every
+        # not-signed-in result other than "no profile yet" into a PASS reading
+        # "No Microsoft account is signed into this profile."
+        #
+        # So a Preferences file that was locked, corrupt, or caught truncated during
+        # one of Chromium's rewrites produced a GREEN privacy light asserting a fact
+        # nobody had established. The caller now matches this constant and reports
+        # UNKNOWN, which is an acceptable answer here; a green light is not.
+        return False, PREFS_UNREADABLE
 
     accounts = prefs.get("account_info") or []
     signed_in = any(isinstance(a, dict) and a.get("email") for a in accounts)

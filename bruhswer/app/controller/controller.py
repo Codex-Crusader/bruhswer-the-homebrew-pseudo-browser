@@ -38,6 +38,49 @@ class LaunchOutcome:
     session: session_manager.Session | None = None
 
 
+@dataclass(frozen=True)
+class VerificationRequest:
+    """An immutable snapshot of everything a verification pass needs.
+
+    EXISTS SO VERIFICATION CAN RUN OFF THE UI THREAD SAFELY.
+
+    `Controller.verify()` reads `self.session` and `self.privacy_mode` while it runs.
+    That is fine on one thread, but the re-verification worker runs concurrently with
+    `start()` and `stop()` - and `stop()` DELETES a disposable profile directory. A
+    worker holding `self.session` could therefore be reading a profile path that the UI
+    thread is in the middle of destroying, and would report checks about a session that
+    no longer exists.
+
+    So the UI thread builds one of these under its own control, hands it over by value,
+    and the worker calls `run_verification()` below, which touches no shared state at
+    all. `generation` lets a result that arrives after the session changed be dropped
+    rather than displayed.
+    """
+
+    profile_dir: Path
+    argv: tuple[str, ...]
+    privacy_mode: str
+    edge_path: Path | None
+    download_dir: Path | None
+    session_id: str | None
+    generation: int
+
+
+def run_verification(request: VerificationRequest) -> verifier.VerificationResult:
+    """Pure verification from a snapshot. Safe to call on a worker thread.
+
+    Reads no controller attribute and mutates nothing. The renderer-PID query lives
+    here rather than in the snapshot because it is itself a ~258ms PowerShell call and
+    belongs on the worker, not on the UI thread that built the request.
+    """
+    renderers = (embed.renderer_pids_for_profile(request.profile_dir)
+                 if request.session_id is not None else [])
+    return verifier.verify_all(
+        request.profile_dir, list(request.argv), request.privacy_mode,
+        request.edge_path, download_dir=request.download_dir,
+        renderer_pids=renderers)
+
+
 class Controller:
     """Owns the session lifecycle. Holds no browser-supplied state."""
 
@@ -45,20 +88,51 @@ class Controller:
         config.ensure_dirs()
         self.edge_path = config.find_edge()
         self.session: session_manager.Session | None = None
-        self._process = None
+        # Annotated: a Popen is assigned to this later, so a bare `= None` makes the
+        # attribute's inferred type None and every later assignment an error.
+        self._process: subprocess.Popen[bytes] | None = None
         self._hosted_hwnd: int | None = None
         self.privacy_mode = MODE_STANDARD
+        # Bumped every time the session changes. A verification result carrying an old
+        # generation describes a session that is gone and is discarded rather than
+        # shown - see VerificationRequest.
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     # --- STATUS / VERIFY --------------------------------------------------------
 
-    def verify(self, mode: str = session_manager.PERSISTENT) -> verifier.VerificationResult:
-        """Run every check without launching anything."""
+    def verification_request(
+            self, mode: str = session_manager.PERSISTENT) -> VerificationRequest:
+        """Snapshot the state a verification needs. MUST be called on the UI thread.
+
+        Cheap and non-blocking on purpose: it copies attributes and builds an argv
+        list, and does not start a single helper process. All the slow work happens in
+        run_verification(), which takes only this snapshot.
+        """
         profile = self._profile_for_preview(mode)
         argv = self._build_argv(profile) if self.edge_path else []
-        renderers = (embed.renderer_pids_for_profile(self.session.profile_dir)
-                     if self.session is not None else [])
-        return verifier.verify_all(profile, argv, self.privacy_mode, self.edge_path,
-                                   renderer_pids=renderers)
+        download_dir = (quarantine.quarantine_dir_for(self.session.session_id)
+                        if self.session is not None else None)
+        return VerificationRequest(
+            profile_dir=profile,
+            argv=tuple(argv),
+            privacy_mode=self.privacy_mode,
+            edge_path=self.edge_path,
+            download_dir=download_dir,
+            session_id=None if self.session is None else self.session.session_id,
+            generation=self._generation)
+
+    def verify(self, mode: str = session_manager.PERSISTENT) -> verifier.VerificationResult:
+        """Run every check without launching anything.
+
+        BLOCKING, and it starts 15 helper processes. Kept for the synchronous callers
+        (startup, the BRUH panel, the tests). Anything on a timer must go through
+        verification_request() + run_verification() on a worker instead.
+        """
+        return run_verification(self.verification_request(mode))
 
     def status(self) -> dict:
         return {
@@ -137,6 +211,7 @@ class Controller:
                 result)
 
         self.session = session
+        self._generation += 1
         self._process = edge.launch(argv)
         _log.info("session started mode=%s", session.mode)
         return LaunchOutcome(True, "bruhswer READY", result, session)
@@ -168,6 +243,7 @@ class Controller:
             self._stop_profile_processes(self.session.profile_dir)
 
         session, self.session = self.session, None
+        self._generation += 1
         if session is None:
             return True, "No session was open."
 
@@ -178,6 +254,99 @@ class Controller:
 
         messages.append("Persistent session closed; its profile was kept.")
         return True, " ".join(messages)
+
+    # --- PANIC ------------------------------------------------------------------
+
+    def panic_stop(self) -> tuple[bool, str]:
+        """Stop this session's browser IMMEDIATELY. Deliberately not stop().
+
+        WHY NOT stop(): that path is graceful by design - it posts WM_CLOSE, waits up
+        to 8 seconds for the launcher, and then waits up to 12 more before force
+        targeting anything. Twenty seconds is not a panic. The graceful path exists for
+        good reasons (a clean exit avoids the profile being marked as crashed, which
+        would make the next launch offer to restore tabs), and this is an explicit,
+        documented exception to it rather than a replacement.
+
+        THE ACCEPTED COST, stated rather than discovered later: force-killing leaves
+        the profile marked as crashed. `--hide-crash-restore-bubble` and
+        `session.restore_on_startup` already blunt what the user sees, and a disposable
+        profile is deleted immediately afterwards anyway. For a panic control that is
+        the right trade.
+
+        WHAT IT WILL NOT DO: touch any Edge process it cannot prove belongs to this
+        session. Attribution is by exact `--user-data-dir` match plus a process
+        creation time re-checked against the opened handle, so a recycled PID - even
+        one that became another msedge.exe, i.e. the user's own browser - is refused.
+
+        The returned message describes only what was OBSERVED. If the profile could not
+        be destroyed because files were still locked, it says so; it never prints
+        "destroyed and verified gone" on the strength of having asked.
+        """
+        session = self.session
+        if session is None:
+            return False, "No session was open."
+
+        processes = embed.attributed_edge_processes(session.profile_dir)
+        if processes is None:
+            # Could not enumerate. Saying "nothing was running" here would be a claim
+            # bruhswer just failed to establish, on the one path where being wrong
+            # matters most.
+            _log.error("panic: could not enumerate this session's browser processes")
+            return False, ("PANIC: bruhswer could not ask Windows which browser "
+                           "processes belong to this session, so it stopped nothing. "
+                           "Close the browser manually.")
+
+        report = embed.terminate_attributed(processes)
+        _log.warning("panic: terminated=%d confirmed=%d refused=%d failed=%d",
+                     report.terminated, report.confirmed_exited, report.refused,
+                     report.failed)
+
+        self._process = None
+        self._hosted_hwnd = None
+        self.session = None
+        self._generation += 1
+
+        parts = [f"PANIC: {report.terminated} browser process(es) terminated"]
+        if report.confirmed_exited < report.terminated:
+            # TerminateProcess is asynchronous. Only the ones actually observed to exit
+            # may be described as gone.
+            parts.append(f"{report.confirmed_exited} confirmed exited")
+        if report.refused:
+            parts.append(f"{report.refused} left alone (identity no longer matched)")
+        if report.failed:
+            parts.append(f"{report.failed} could not be terminated")
+        if report.already_gone:
+            parts.append(f"{report.already_gone} could not be opened")
+        message = "; ".join(parts) + "."
+
+        # WHETHER THIS COUNTS AS SUCCESS. Returning True here on the strength of having
+        # ASKED is the panic-shaped version of this project's oldest defect, and a real
+        # walkthrough produced exactly that: "0 terminated; 9 left alone" was reported
+        # as a green success while nine Edge processes were still running and the
+        # controller had already forgotten the session.
+        #
+        # So success requires every process observed to be in a terminal state:
+        # everything terminated was confirmed exited, nothing was refused, nothing
+        # failed, and nothing was left unopenable (an OpenProcess failure may mean the
+        # process is gone, but it may equally mean bruhswer could not look - and
+        # "could not look" is not "it stopped").
+        clean = (report.refused == 0 and report.failed == 0
+                 and report.already_gone == 0
+                 and report.confirmed_exited == report.terminated)
+        if not clean:
+            message += (" bruhswer could NOT confirm the browser stopped. Check for "
+                        "remaining Microsoft Edge windows yourself.")
+
+        if session.is_disposable:
+            # Still through session_manager.destroy(), which keeps the reparse-point
+            # and containment guards. Panic does not get a shortcut around those.
+            destroyed, detail = session_manager.destroy(session)
+            if not destroyed:
+                return False, (message + " The disposable profile was NOT fully "
+                                         "destroyed: " + detail)
+            return clean, message + " " + detail
+
+        return clean, message + " The persistent profile was kept."
 
     # --- NAVIGATE ---------------------------------------------------------------
 
@@ -195,6 +364,8 @@ class Controller:
         except urls.RefusedURL as exc:
             return False, f"BRUH. NO. {exc}"
 
+        if self.edge_path is None:
+            return False, "Microsoft Edge was not found on this PC."
         ok = edge.open_in_running_session(self.edge_path, self.session.profile_dir, url)
         if not ok:
             return False, "Could not hand that address to the browser."
@@ -203,6 +374,25 @@ class Controller:
 
     def new_tab(self) -> tuple[bool, str]:
         return self.navigate(urls.BLANK)
+
+    def open_account_settings(self) -> tuple[bool, str]:
+        """Open Edge's profile settings, where the user can sign out. Closed verb.
+
+        Takes no argument. The destination is a constant inside edge.py, so this cannot
+        be steered anywhere else.
+
+        The message says the page was OPENED. It does not say the user was signed out,
+        because bruhswer has not checked and could not have - that is established only
+        by re-reading the profile, which the next verification pass does.
+        """
+        if not self.is_running() or self.session is None:
+            return False, "No bruhswer session is open."
+        if self.edge_path is None:
+            return False, "Microsoft Edge was not found on this PC."
+        if not edge.open_account_settings(self.edge_path, self.session.profile_dir):
+            return False, "Could not open the browser's settings page."
+        return True, ("Opened Edge's profile settings. Sign out there, then re-run "
+                      "BRUH check to confirm the account is gone.")
 
     # --- EXPORT_REQUEST ---------------------------------------------------------
 
@@ -269,6 +459,11 @@ class Controller:
         # Chromium switch; Edge ignored it and downloads went to the user's real
         # Downloads folder. The quarantine location is set as a PROFILE PREFERENCE in
         # privacy_guard.apply_download_directory() and verified on every launch.
+        # Every caller checks edge_path first (start() refuses without it, and both
+        # verification_request() and preview_launch_command() guard). Stating the
+        # precondition here turns an implicit invariant into a checked one.
+        if self.edge_path is None:
+            raise RuntimeError("_build_argv called with no browser runtime found")
         extra: tuple[str, ...] = ()
         if self.privacy_mode == MODE_MAXIMUM:
             extra = ("--disable-features=InterestCohort,PrivacySandboxSettings4",)

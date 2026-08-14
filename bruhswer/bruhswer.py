@@ -52,11 +52,18 @@ def _use_utf8_stdio() -> None:
     placeholder instead of terminating the report.
     """
     for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, OSError, ValueError):
+        # getattr rather than a direct call. `reconfigure` is a TextIOWrapper method,
+        # not part of the TextIO protocol, so calling it directly is an unresolved
+        # reference to every static checker. Behaviour is unchanged - the old code
+        # caught AttributeError for precisely this case; the lookup is now explicit.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
             # Not a reconfigurable text stream (redirected oddly, or already closed).
             # Printing may still fail, but bruhswer must not fail to START over it.
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
             pass
 
 

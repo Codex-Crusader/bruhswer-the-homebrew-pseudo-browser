@@ -40,12 +40,68 @@ EXECUTABLE_SUFFIXES = {
     ".reg", ".lnk", ".inf", ".sys", ".scf", ".appx", ".msix",
 }
 
+# --- content sniffing -----------------------------------------------------------
+# An extension is a CLAIM MADE BY THE WEBSITE. It is the least trustworthy thing about
+# a download, and it is what `is_executable_type` above relies on entirely: a site that
+# serves a PE image named "invoice.pdf" gets no warning from a suffix check, because the
+# suffix is exactly the part the site controls.
+#
+# So the first bytes are read too. These are FILE FORMAT signatures, not malware
+# signatures, and the distinction is the whole point:
+#
+#   what this CAN say   "these bytes are a Windows executable image"      (a fact)
+#   what it CANNOT say  "this file is malware" / "this file is safe"      (not measured)
+#
+# bruhswer does not scan, does not reputation-check, and does not sandbox-detonate. It
+# reports the format it found and whether that format disagrees with the name. A clean
+# result here means "nothing recognised", never "safe" - brief SS37, and the module
+# docstring above says the same thing.
+_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"MZ", "Windows executable (PE)"),
+    (b"\x7fELF", "ELF executable"),
+    (b"\xca\xfe\xba\xbe", "Java class / Mach-O fat binary"),
+    (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "OLE compound file (legacy Office, .msi)"),
+    (b"PK\x03\x04", "ZIP container (may hold .appx, .jar, Office, or anything else)"),
+    (b"Rar!\x1a\x07", "RAR archive"),
+    (b"7z\xbc\xaf\x27\x1c", "7-Zip archive"),
+    (b"#!", "script with a shebang line"),
+    (b"%PDF-", "PDF document"),
+)
+
+# Formats that ARE directly loadable code on this platform. A ZIP is not on this list:
+# it is a container, and calling every .zip "executable" would train the user to ignore
+# the warning, which is worse than not showing one.
+_EXECUTABLE_KINDS = frozenset({
+    "Windows executable (PE)", "ELF executable", "Java class / Mach-O fat binary",
+})
+
+
+def sniff_kind(path: Path) -> str | None:
+    """The file format the BYTES say this is, or None if nothing is recognised.
+
+    Never raises, and never reads more than the signature: a quarantined file is
+    hostile input, and bruhswer has no reason to pull it into memory.
+    """
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        return None
+    if not head:
+        return None
+    for signature, label in _MAGIC:
+        if head.startswith(signature):
+            return label
+    return None
+
 
 @dataclass(frozen=True)
 class QuarantinedFile:
     path: Path
     size: int
     modified: datetime
+    # What the BYTES say (None = nothing recognised, which is not the same as "safe").
+    sniffed_kind: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -53,7 +109,38 @@ class QuarantinedFile:
 
     @property
     def is_executable_type(self) -> bool:
+        """The file's NAME claims an executable type. Site-controlled, so weak."""
         return self.path.suffix.lower() in EXECUTABLE_SUFFIXES
+
+    @property
+    def is_executable_content(self) -> bool:
+        """The file's BYTES are directly loadable code, whatever it is called."""
+        return self.sniffed_kind in _EXECUTABLE_KINDS
+
+    @property
+    def extension_mismatch(self) -> bool:
+        """The bytes are executable and the name does NOT admit it.
+
+        This is the case worth a distinct warning: `is_executable_type` alone stays
+        quiet for a PE image called "invoice.pdf", because it only ever looked at the
+        part of the download the website chose.
+
+        Deliberately one-directional. An .exe whose bytes are a PE is consistent and
+        already flagged by name; a .zip that sniffs as a ZIP is consistent; and an
+        unrecognised format is NOT reported as a mismatch, because "bruhswer did not
+        recognise these bytes" is not evidence of anything.
+        """
+        return self.is_executable_content and not self.is_executable_type
+
+    @property
+    def content_note(self) -> str:
+        """One line for the UI. States the format, never a safety verdict."""
+        if self.sniffed_kind is None:
+            return "Content not recognised. That is not a clean bill of health."
+        if self.extension_mismatch:
+            return (f"BRUH. The name says {self.path.suffix or '(no extension)'}, "
+                    f"but the bytes are a {self.sniffed_kind}.")
+        return f"Content looks like: {self.sniffed_kind}."
 
 
 def quarantine_dir_for(session_id: str) -> Path:
@@ -99,7 +186,8 @@ def list_quarantine(session_id: str) -> list[QuarantinedFile]:
             continue
         items.append(QuarantinedFile(
             child, stat.st_size,
-            datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)))
+            datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            sniff_kind(child)))
     return items
 
 
@@ -123,7 +211,9 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     # A reparse point could redirect the read somewhere else entirely. Both halves are
     # needed: on Windows a junction is a reparse point that is NOT a symlink.
     try:
-        if os.path.islink(item.path) or (item.path.stat().st_file_attributes & 0x400):  # noqa: PTH114
+        if (os.path.islink(item.path)  # noqa: PTH114
+                or (item.path.stat().st_file_attributes
+                    & config.FILE_ATTRIBUTE_REPARSE_POINT)):
             return False, "Refused: quarantined item is a link or reparse point."
     except (OSError, AttributeError):
         pass
@@ -135,6 +225,26 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     if not dest_dir.is_dir():
         return False, "Destination is not a folder."
 
+    # The DESTINATION gets the same reparse-point treatment as the source. The folder
+    # picker hands back whatever the user selected, and a junction is a perfectly
+    # ordinary-looking folder in the Windows picker - selecting one would land the
+    # export somewhere the user did not choose and did not see.
+    #
+    # `is_symlink()` is NOT sufficient and is not used: measured in this project,
+    # Path.is_symlink() returns False for a directory junction made with `mklink /J`.
+    # config.FILE_ATTRIBUTE_REPARSE_POINT is the test that actually fires.
+    #
+    # Checked on the path AS SELECTED with follow_symlinks=False, before resolve()
+    # follows the link away and destroys the evidence that there was one.
+    try:
+        attrs = destination_dir.stat(follow_symlinks=False).st_file_attributes
+        if attrs & config.FILE_ATTRIBUTE_REPARSE_POINT:
+            _log.error("export refused: destination is a reparse point")
+            return False, ("Refused: that destination folder is a link or junction, "
+                           "so the file would not land where it appears to.")
+    except (OSError, AttributeError):
+        pass
+
     final = dest_dir / safe_export_name(source.name)
     counter = 1
     while final.exists():
@@ -142,6 +252,15 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         counter += 1
         if counter > 999:
             return False, "Could not find a free filename in that folder."
+
+    # Belt and braces on top of safe_export_name(). That function already strips every
+    # separator, so the name cannot climb out - but this asserts the RESULT rather than
+    # trusting the sanitiser, which is the same discipline the profile-delete path uses.
+    # If these ever disagree, the export is refused instead of landing outside the
+    # folder the user picked.
+    if final.parent != dest_dir:
+        _log.error("export refused: final path escaped the chosen folder")
+        return False, "Refused: the export path did not stay inside the chosen folder."
 
     try:
         shutil.copy2(source, final)

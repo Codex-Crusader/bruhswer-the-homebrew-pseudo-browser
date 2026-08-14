@@ -106,6 +106,10 @@ def main() -> int:
         return 1
 
     session = outcome.session
+    # Narrowed explicitly: a launched outcome always carries a session, and
+    # saying so lets the rest of this function read session.profile_dir
+    # without every access looking like an attribute on None.
+    assert session is not None, "launch reported success without a session"
     check("profile directory created", session.profile_dir.is_dir(),
           str(session.profile_dir))
     check("profile is inside BRUHWSER",

@@ -70,7 +70,11 @@ def _distinct_colours(hwnd: int | None, step: int = 17) -> int | None:
     """
     if not hwnd:
         return None
-    gdi = ctypes.windll.gdi32
+    # ctypes.WinDLL(...) rather than ctypes.windll.X. Identical at runtime, but
+    # `windll` is declared only for win32 in the type stubs, so every checker
+    # reports it as an unresolved reference. The explicit form is also what the
+    # rest of this codebase already uses (see app/browser/embed.py).
+    gdi = ctypes.WinDLL("gdi32")
     rect = wt.RECT()
     embed.USER32.GetClientRect(wt.HWND(hwnd), ctypes.byref(rect))
     width, height = rect.right, rect.bottom
@@ -203,7 +207,8 @@ def main() -> int:
     started = pump_until(win, lambda: win.result is not None, 90)
     check("security verification ran", started,
           f"{len(win.result.checks) if win.result else 0} checks")
-    check("no launch blockers", bool(win.result) and not win.result.blockers)
+    result = win.result
+    check("no launch blockers", result is not None and not result.blockers)
 
     print("\n2. Browser window opens and is hosted inside bruhswer")
     hosted = pump_until(win, lambda: win.hosted_hwnd is not None, 90)
@@ -240,7 +245,16 @@ def main() -> int:
     # This check used to be a hardcoded PASS quoting a measurement from one machine.
     # It must now come from the live renderer tokens, and must say UNKNOWN when there
     # is nothing running rather than inventing a green light.
-    renderers = embed.renderer_pids_for_profile(win.controller.session.profile_dir)
+    session = win.controller.session
+    assert session is not None, "no session while measuring renderers"
+    renderers = embed.renderer_pids_for_profile(session.profile_dir)
+    # None means the QUERY failed; [] means it ran and found none. Those became
+    # different return values so that a PowerShell hiccup could stop being reported as
+    # "no browser session is running". `len(None)` would raise here, so the two are
+    # separated before anything counts them.
+    check("the renderer query itself succeeded", renderers is not None,
+          "None = bruhswer could not ask Windows, which is not the same as zero")
+    renderers = renderers or []
     check("renderer processes found to measure", len(renderers) > 0,
           f"{len(renderers)} renderer(s)")
     facts = tokens.summarise_renderers(renderers)
@@ -285,7 +299,9 @@ def main() -> int:
             extra.destroy()
 
     print("\n6. Download goes to quarantine, not the real Downloads folder")
-    session_id = win.controller.session.session_id
+    dl_session = win.controller.session
+    assert dl_session is not None, "no session while checking downloads"
+    session_id = dl_session.session_id
     qdir = quarantine.quarantine_dir_for(session_id)
     for stale in qdir.rglob("*"):
         if stale.is_file():
@@ -331,7 +347,9 @@ def main() -> int:
     time.sleep(3)
     win2 = BrowserWindow()
     ok2 = pump_until(win2, lambda: win2.result is not None, 90)
-    check("relaunch verifies cleanly", ok2 and not win2.result.blockers)
+    result2 = win2.result
+    check("relaunch verifies cleanly",
+          ok2 and result2 is not None and not result2.blockers)
     hosted2 = pump_until(win2, lambda: win2.hosted_hwnd is not None, 90)
     check("relaunch opens a browser again", hosted2)
     win2.on_close()

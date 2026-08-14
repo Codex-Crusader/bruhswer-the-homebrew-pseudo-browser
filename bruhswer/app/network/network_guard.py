@@ -26,6 +26,7 @@ This is not a VM boundary and this module must never imply that it is.
 
 from __future__ import annotations
 
+import enum
 import ipaddress
 
 from .. import config, sysquery
@@ -33,6 +34,36 @@ from ..logging_setup import get_logger
 from ..verdict import Check, Verdict
 
 _log = get_logger("network")
+
+
+class PolicyState(enum.Enum):
+    """What bruhswer can say about one row of network policy.
+
+    A TYPE, not a display string, and the difference was a real defect.
+
+    policy_summary() used to return prose, and each UI pattern-matched that prose
+    against its own hard-coded colour dict. When the IPv6 row stopped claiming
+    "BLOCKED" - correctly, because its effect was never measured - both dicts missed
+    the new string. `panels/network_panel.py` raised KeyError and the Network panel
+    vanished entirely; `app_ui.py` would have done the same to the --panel UI. A change
+    made to stop bruhswer overclaiming took two screens offline instead, and every unit
+    test passed, because nothing tied the producing module to the consuming ones.
+
+    Security meaning must not depend on matching prose. The enum carries the MEANING;
+    each UI maps meaning to colour, and a test asserts every member has one.
+    """
+
+    ALLOWED = "ALLOWED"
+    BLOCKED = "BLOCKED"
+    # The rule exists and is correctly formed, but its effect on the browser has never
+    # been measured on this machine. Distinct from BLOCKED, which on the IPv4 rows
+    # rests on the empirical gate-A16 result.
+    RULE_UNMEASURED = "RULE SET, EFFECT NOT MEASURED"
+    # The platform cannot enforce it at all. Not a failure to configure.
+    NOT_ENFORCEABLE = "NOT ENFORCEABLE"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 def _expected_rule_names() -> dict[str, str]:
@@ -56,6 +87,40 @@ def _normalise(addresses) -> set[str]:
         except ValueError:
             out.add(text.lower())
     return out
+
+
+# Values Get-NetConnectionProfile reports for IPv6Connectivity when the adapter has no
+# usable IPv6 path. Named rather than inlined so the comparison below reads as policy.
+_NO_IPV6_STATES = ("nointernet", "disconnected", "localnetwork")
+
+
+def _ipv6_connectivity() -> str:
+    """What Windows says about this host's IPv6 reachability, or 'unknown'.
+
+    ADAPTER STATE ONLY. This says nothing about whether bruhswer's firewall rule works
+    - it is context for the reader, not evidence for the check, and the caller's detail
+    text is written so the two cannot be confused.
+    """
+    states = {str(p.get("IPv6Connectivity", "")).strip().lower()
+              for p in sysquery.network_profiles()}
+    states.discard("")
+    if not states:
+        return "unknown"
+    return ",".join(sorted(states))
+
+
+def _ipv6_connectivity_note() -> str:
+    state = _ipv6_connectivity()
+    if state == "unknown":
+        return (" Windows did not report this host's IPv6 connectivity, so bruhswer "
+                "cannot say whether IPv6 is in use here either.")
+    if all(s in _NO_IPV6_STATES for s in state.split(",")):
+        return (f" Separately, Windows reports no IPv6 internet path on this host "
+                f"({state}), which limits the exposure - but that is the network's "
+                f"current state, not something bruhswer enforces, and it can change "
+                f"the moment the PC joins another network.")
+    return (f" Windows reports IPv6 connectivity on this host ({state}), so the "
+            f"unmeasured rule is covering a path that is actually live.")
 
 
 def verify(edge_path) -> list[Check]:
@@ -136,6 +201,20 @@ def verify(edge_path) -> list[Check]:
                     "have it. Measured in Stage 4 gate A17."),
             evidence=f"controller_elevated={elevated}"))
 
+    # IPv6: the rule's PRESENCE is checked above and can honestly PASS. Its EFFECT has
+    # never been measured on this machine, and that asymmetry with IPv4 was invisible
+    # because policy_summary() simply printed "BLOCKED" for both.
+    checks.append(Check(
+        check_id="net.rule.ipv6.effect", title="IPv6 blocking proven to stop the browser",
+        verdict=Verdict.UNKNOWN, critical=False,
+        detail=("The IPv6 Block rule is present and correctly formed, but unlike the "
+                "IPv4 rule its effect on the browser has never been measured on this "
+                "machine. Gate A16 proved the IPv4 rule empirically; there is no "
+                "equivalent IPv6 result, so bruhswer reports UNKNOWN instead of "
+                "assuming the two behave the same." + _ipv6_connectivity_note()),
+        evidence=f"ipv4_effect=gate A16 measured; ipv6_effect=not measured; "
+                 f"host_ipv6={_ipv6_connectivity()}"))
+
     # The honest limitation. Reported every single time, never hidden, never green.
     checks.append(Check(
         check_id="net.loopback", title="Localhost / host services blocked",
@@ -155,15 +234,32 @@ def verify(edge_path) -> list[Check]:
     return checks
 
 
-def policy_summary() -> list[tuple[str, str]]:
-    """What the policy actually is, for the UI. No claim beyond what was measured."""
+def policy_summary() -> list[tuple[str, PolicyState]]:
+    """What the policy actually is, for the UI. No claim beyond what was measured.
+
+    The IPv6 row is deliberately NOT "BLOCKED", and the difference from the IPv4 rows
+    is the whole point of this docstring.
+
+    Every other "BLOCKED" here rests on gate A16, which measured the effect
+    EMPIRICALLY: the router went from REACHED to BLOCKED to REACHED again as the rule
+    was applied and removed, with ERR_NETWORK_ACCESS_DENIED in the browser. Nothing
+    equivalent was ever run for IPv6. The rule is present and correctly formed - that
+    is what `verify()` above checks, and it PASSES honestly - but "a correctly formed
+    Block rule exists" and "the browser cannot reach fc00::/7" are different claims,
+    and this table was making the second one on the strength of the first.
+
+    bruhswer also cannot close the gap from here. The rules are `-Program` scoped to
+    msedge.exe, so a probe sent from bruhswer's own process would measure nothing about
+    Edge - the identical error that made the original localhost claim wrong - and
+    `app/` is forbidden from importing `socket` at all (tests/test_security.py).
+    """
     return [
-        ("Internet", "ALLOWED"),
-        ("Router", "BLOCKED"),
-        ("LAN devices", "BLOCKED"),
-        ("Private IPv4 ranges", "BLOCKED"),
-        ("IPv6 local ranges", "BLOCKED"),
-        ("Localhost (127.0.0.1)", "NOT ENFORCEABLE"),
-        ("This PC's own IP", "NOT ENFORCEABLE"),
-        ("Development services", "NOT ENFORCEABLE"),
+        ("Internet", PolicyState.ALLOWED),
+        ("Router", PolicyState.BLOCKED),
+        ("LAN devices", PolicyState.BLOCKED),
+        ("Private IPv4 ranges", PolicyState.BLOCKED),
+        ("IPv6 local ranges", PolicyState.RULE_UNMEASURED),
+        ("Localhost (127.0.0.1)", PolicyState.NOT_ENFORCEABLE),
+        ("This PC's own IP", PolicyState.NOT_ENFORCEABLE),
+        ("Development services", PolicyState.NOT_ENFORCEABLE),
     ]

@@ -26,6 +26,15 @@ from app import config, sysquery  # noqa: E402
 
 SUITES = [
     ("unit / static analysis", "test_security.py", False),
+    # Both of these are pure and need no network policy and no browser, so they run
+    # early: a URL-normalisation or overclaim regression should fail the suite in
+    # milliseconds rather than after the multi-minute browser suites.
+    ("address bar properties", "test_urls_fuzz.py", False),
+    ("overclaim regressions", "test_overclaim_regressions.py", False),
+    ("runtime re-verification", "test_reverification.py", False),
+    ("disposable overwrite", "test_disposable_overwrite.py", False),
+    ("file manifest", "test_integrity.py", False),
+    ("panic key / account settings", "test_panic_and_account.py", False),
     ("persistent profile", "test_persistent_profile.py", False),
     ("end-to-end session", "test_end_to_end.py", True),
     ("network regression (SS12/SS13)", "test_network_regression.py", True),
@@ -40,9 +49,16 @@ def main() -> int:
     # redirection, stdout is a pipe and Python falls back to the legacy ANSI codepage.
     # The suite used to die on its own banner before running a single test.
     for stream in (sys.stdout, sys.stderr):
+        # getattr rather than a direct call: `reconfigure` exists on TextIOWrapper
+        # but not on every TextIO a stream can be, so a direct call is an unresolved
+        # reference to every static checker. The behaviour is identical - the old
+        # code caught AttributeError for exactly this case.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, OSError, ValueError):
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
             pass
 
     print(f"{config.MOAI} bruhswer regression suite")
@@ -75,7 +91,15 @@ def main() -> int:
                               errors="replace", shell=False, env=child_env)
         elapsed = time.perf_counter() - start
 
-        summary = [ln for ln in (proc.stdout or "").splitlines()
+        # BOTH streams, for the same reason the failure scan below already reads both:
+        # `unittest` writes "Ran N tests" and "OK" to STDERR, while the older
+        # hand-rolled suites print "PASSED n FAILED n" to stdout. Scanning stdout only
+        # meant every unittest-based suite reported a blank line under its name - it
+        # passed, and the run showed no evidence that it had. This project's own rule
+        # is to take counts from the run output, so a runner that prints no counts
+        # quietly defeats it.
+        combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()
+        summary = [ln for ln in combined
                    if "PASSED" in ln or ln.startswith("Ran ") or ln.startswith("OK")]
         for line in summary[-2:]:
             print(f"    {line.strip()}")

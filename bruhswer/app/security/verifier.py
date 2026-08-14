@@ -10,6 +10,7 @@ that was never verified is the exact defect this project treats as a vulnerabili
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,9 +21,13 @@ from ..logging_setup import get_logger
 from ..network import network_guard
 from ..privacy import privacy_guard
 from ..verdict import Check, Verdict, worst
-from . import browser_guard
+from . import browser_guard, integrity
 
 _log = get_logger("verifier")
+
+# "Asked, and there are none" - as opposed to None, which means "could not ask".
+# A module-level tuple rather than a mutable [] default, so nothing can append to it.
+NO_RENDERERS: tuple[int, ...] = ()
 
 
 @dataclass
@@ -48,24 +53,40 @@ class VerificationResult:
 def verify_all(profile_dir: Path, argv: list[str], mode: str,
                edge_path: Path | None,
                download_dir: Path | None = None,
-               renderer_pids: list[int] | None = None) -> VerificationResult:
+               renderer_pids: Sequence[int] | None = NO_RENDERERS
+               ) -> VerificationResult:
+    """`renderer_pids` has THREE meaningful values, not two:
+
+        []      asked Windows, found no renderer processes
+        [...]   these are the renderers; measure their tokens
+        None    the query FAILED, so nothing is known either way
+
+    The default is the empty list, meaning "no session, nothing to measure" - which is
+    the right answer for the pre-launch call in Controller.start(). None is reserved
+    for a genuine measurement failure and must be passed explicitly.
+    """
     result = VerificationResult()
 
     result.checks.extend(edge.verify_runtime(edge_path))
     if edge_path is not None:
         result.checks.extend(browser_guard.verify(profile_dir, argv))
         # Measured, not assumed: what the renderer tokens actually are on THIS machine.
+        #
+        # Passed straight through, NOT as `renderer_pids or []`. That idiom collapsed
+        # None ("could not ask Windows") into [] ("asked, and there are none"), which
+        # is the distinction embed.renderer_pids_for_profile exists to preserve.
         result.checks.extend(
-            browser_guard.verify_renderer_sandbox(renderer_pids or []))
+            browser_guard.verify_renderer_sandbox(renderer_pids))
         result.checks.extend(network_guard.verify(edge_path))
     result.checks.extend(host_guard.evaluate())
     result.checks.extend(_controller_checks())
+    result.checks.extend(integrity.verify())
     result.checks.extend(_privacy_checks(profile_dir, mode))
     if download_dir is not None:
         result.checks.extend(_download_checks(profile_dir, download_dir))
     result.checks.extend(_dns_checks())
 
-    verdicts = {}
+    verdicts: dict[str, int] = {}
     for check in result.checks:
         verdicts[str(check.verdict)] = verdicts.get(str(check.verdict), 0) + 1
     _log.info("verification complete: %s blockers=%d", verdicts, len(result.blockers))
@@ -122,6 +143,18 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
             "privacy.account", "Browser account sign-in", Verdict.UNKNOWN,
             critical=False,
             detail="No session has run yet, so there is no profile to read.",
+            evidence=sign_detail))
+    elif sign_detail == privacy_guard.PREFS_UNREADABLE:
+        # "Could not read the file" is NOT "no account is signed in". This branch used
+        # to fall through to the else below and render as a green PASS asserting that
+        # no Microsoft account was attached - on the strength of a file bruhswer had
+        # just failed to parse.
+        checks.append(Check(
+            "privacy.account", "Browser account sign-in", Verdict.UNKNOWN,
+            critical=False,
+            detail=("The profile's Preferences file could not be read, so bruhswer "
+                    "cannot tell whether Edge has signed this session into a Microsoft "
+                    "account. Treat this session as NOT anonymous until it can."),
             evidence=sign_detail))
     elif signed_in:
         checks.append(Check(

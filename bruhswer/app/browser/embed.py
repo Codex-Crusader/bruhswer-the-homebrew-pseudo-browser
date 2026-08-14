@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import config
@@ -46,6 +48,7 @@ from ..logging_setup import get_logger
 _log = get_logger("embed")
 
 USER32 = ctypes.WinDLL("user32", use_last_error=True)
+KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 GWL_STYLE = -16
 WS_CHILD = 0x40000000
@@ -168,11 +171,25 @@ _PS_RENDERERS = (
 )
 
 
-def renderer_pids_for_profile(profile_dir: Path) -> list[int]:
-    """PIDs of this session's renderer processes - the ones that run web content."""
+def renderer_pids_for_profile(profile_dir: Path) -> list[int] | None:
+    """PIDs of this session's renderer processes - the ones that run web content.
+
+    Returns None when the QUERY ITSELF failed, and a list (possibly empty) when it
+    succeeded. The distinction is load-bearing and used to be missing.
+
+    This returned a bare [] for three different situations: the query timed out, the
+    query could not be started, and the query ran fine and found no renderers. The
+    caller could not tell them apart, so a single PowerShell hiccup during a live
+    session produced a sandbox check reading "No browser session is running, so there
+    is nothing to measure yet" - a statement that was plainly false with the browser
+    on screen - and, once re-verification was added, a red "something changed while
+    you were browsing" curtain over a session where nothing had.
+
+    An empty list now means "asked, and there are none". None means "could not ask".
+    """
     marker = profile_dir.name
     if not marker.replace("_", "").replace("-", "").isalnum():
-        return []
+        return None
     try:
         proc = subprocess.run(
             [str(config.POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",
@@ -180,9 +197,261 @@ def renderer_pids_for_profile(profile_dir: Path) -> list[int]:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=60, shell=False, creationflags=config.NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return None
+    if proc.returncode != 0:
+        return None
     raw = (proc.stdout or "").strip()
     return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+
+
+# --- attributed process identity, for the panic path ----------------------------
+#
+# WHY THIS EXISTS SEPARATELY FROM edge_pids_for_profile()
+#
+# The panic key TERMINATES processes. That raises the bar on attribution from "good
+# enough to count" to "good enough to kill", and the existing PID query does not clear
+# it, for two reasons:
+#
+#   1. It matches with a PowerShell `-like '*<marker>*'` on the profile DIRECTORY NAME
+#      only. For a disposable session that name is 16 random hex characters and is
+#      effectively unique, but for the persistent session it is the literal string
+#      "persistent" - which would also match a completely unrelated Edge process whose
+#      command line happened to contain that word.
+#   2. Even with a perfect query, a PID can be RECYCLED between the moment it is listed
+#      and the moment OpenProcess runs. Checking the image name afterwards is not
+#      enough: it rules out killing a recycled PID that became notepad.exe, but NOT one
+#      that became another msedge.exe - which is precisely the user's own browser, the
+#      one thing bruhswer must never kill.
+#
+# So this query returns the FULL command line and the process CREATION TIME as a
+# FILETIME, matching is done in Python against the absolute --user-data-dir value, and
+# the creation time is re-read from the OPENED HANDLE before anything is terminated.
+# A FILETIME plus a PID identifies a specific process instance: if the handle's
+# creation time differs from the one observed at enumeration, the PID was reused and
+# bruhswer refuses to touch it.
+#
+# Matching in Python rather than in the query is also what avoids escaping an absolute
+# Windows path into a PowerShell wildcard, where `[` and `]` are metacharacters.
+_PS_EDGE_DETAIL = (
+    "@(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+    "ForEach-Object { [pscustomobject]@{ Pid=$_.ProcessId; "
+    "Created=[string]$_.CreationDate.ToFileTimeUtc(); "
+    "Cmd=[string]$_.CommandLine } }) | ConvertTo-Json -Compress -Depth 3"
+)
+
+
+@dataclass(frozen=True)
+class EdgeProcess:
+    """One Edge process, identified strongly enough to be a termination target."""
+
+    pid: int
+    created: int        # FILETIME, UTC. With the pid, identifies a process INSTANCE.
+
+
+def _normalise_cmdline(text: str) -> str:
+    """Lowered, with quotes removed, so a quoted and unquoted path compare equal.
+
+    subprocess quotes an argument only when it contains a space, so the same profile
+    appears as --user-data-dir=C:\\x on one machine and --user-data-dir="C:\\a b\\x" on
+    another. Both must match.
+    """
+    return text.replace('"', "").lower()
+
+
+def attributed_edge_processes(profile_dir: Path) -> list[EdgeProcess] | None:
+    """Edge processes provably belonging to THIS profile. None if the query failed.
+
+    None and [] are different answers, for the same reason as
+    renderer_pids_for_profile: "could not ask" must never be reported as "there are
+    none", least of all on a path that then tells the user everything was stopped.
+    """
+    try:
+        proc = subprocess.run(
+            [str(config.POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",
+             _PS_EDGE_DETAIL],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60, shell=False, creationflags=config.NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return []
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return None
+
+    # The exact flag bruhswer itself builds in edge.build_command. Anything that does
+    # not carry this precise absolute path is not ours and is not a target.
+    needle = _normalise_cmdline(f"--user-data-dir={profile_dir}")
+
+    out: list[EdgeProcess] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cmd = entry.get("Cmd")
+        if not isinstance(cmd, str) or needle not in _normalise_cmdline(cmd):
+            continue
+        raw_pid = entry.get("Pid")
+        raw_created = entry.get("Created")
+        if raw_pid is None or raw_created is None:
+            continue
+        try:
+            pid = int(raw_pid)
+            created = int(raw_created)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0 and created > 0:
+            out.append(EdgeProcess(pid, created))
+    return out
+
+
+PROCESS_TERMINATE = 0x0001
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# REQUIRED for WaitForSingleObject on a process handle, and easy to omit because
+# terminating works perfectly well without it. MEASURED: without SYNCHRONIZE the wait
+# fails immediately instead of blocking, so `confirmed_exited` came back 0 every time
+# and the panic report permanently understated what it had achieved - claiming less
+# than the truth, which is the safe direction to be wrong but still wrong.
+PROCESS_SYNCHRONIZE = 0x00100000
+_INVALID_HANDLE = wt.HANDLE(-1).value
+_WAIT_OBJECT_0 = 0x0
+
+KERNEL32.OpenProcess.restype = wt.HANDLE
+KERNEL32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+KERNEL32.CloseHandle.argtypes = [wt.HANDLE]
+KERNEL32.CloseHandle.restype = wt.BOOL
+KERNEL32.TerminateProcess.argtypes = [wt.HANDLE, ctypes.c_uint]
+KERNEL32.TerminateProcess.restype = wt.BOOL
+KERNEL32.GetProcessTimes.argtypes = [wt.HANDLE, ctypes.POINTER(wt.FILETIME),
+                                     ctypes.POINTER(wt.FILETIME),
+                                     ctypes.POINTER(wt.FILETIME),
+                                     ctypes.POINTER(wt.FILETIME)]
+KERNEL32.GetProcessTimes.restype = wt.BOOL
+KERNEL32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
+KERNEL32.WaitForSingleObject.restype = wt.DWORD
+
+
+@dataclass(frozen=True)
+class TerminationReport:
+    """What the panic path ACTUALLY did. Every field is reported to the user.
+
+    `refused` is the important one: it counts processes bruhswer declined to touch
+    because their identity no longer matched. Reporting only `terminated` would let a
+    refusal read as a success.
+    """
+
+    terminated: int = 0
+    already_gone: int = 0
+    refused: int = 0
+    failed: int = 0
+    confirmed_exited: int = 0
+
+    @property
+    def attempted(self) -> int:
+        return self.terminated + self.already_gone + self.refused + self.failed
+
+
+def _creation_filetime(handle) -> int | None:
+    creation = wt.FILETIME()
+    exited = wt.FILETIME()
+    kernel = wt.FILETIME()
+    user = wt.FILETIME()
+    if not KERNEL32.GetProcessTimes(handle, ctypes.byref(creation),
+                                    ctypes.byref(exited), ctypes.byref(kernel),
+                                    ctypes.byref(user)):
+        return None
+    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+
+
+def same_process_instance(enumerated: int, from_handle: int) -> bool:
+    """Do these two creation times describe the SAME process instance?
+
+    NOT `==`, and that is not a loosening - it is the difference between a working
+    guard and an inert one.
+
+    MEASURED. The two values come from different Windows APIs with different
+    precision:
+
+        GetProcessTimes        134311582068932898     full 100ns resolution
+        CIM CreationDate       134311582068932890     truncated to MICROSECONDS
+        difference                              8 ticks
+
+    Win32_Process.CreationDate is a CIM datetime with six fractional digits, so
+    `.ToFileTimeUtc()` is always a multiple of 10 in 100ns ticks, while GetProcessTimes
+    generally is not. Exact equality therefore essentially NEVER holds, and the panic
+    key refused every single process it was asked to stop: a real walkthrough reported
+    "0 terminated; 9 left alone (identity no longer matched)" with nine live Edge
+    processes still running.
+
+    The unit test did not catch this because it read BOTH sides with GetProcessTimes,
+    so it was self-consistent and proved nothing about the path that actually runs.
+
+    Comparing at microsecond resolution is exact at the precision the coarser source
+    actually carries. Two different processes sharing a PID *and* being created inside
+    the same microsecond is not a realistic collision, so this keeps the whole point of
+    the guard - refusing a recycled PID, including one recycled into another
+    msedge.exe - while letting it match the process it is looking at.
+    """
+    return enumerated // 10 == from_handle // 10
+
+
+def terminate_attributed(processes: list[EdgeProcess]) -> TerminationReport:
+    """Immediately terminate processes whose identity still checks out.
+
+    THE IDENTITY RE-CHECK IS THE POINT, not a formality. Between the enumeration that
+    produced `processes` and this call, Windows may have recycled a PID. Terminating on
+    the strength of the PID alone would eventually kill somebody else's process, and
+    because the recycled PID could belong to another msedge.exe, checking only the
+    image name would not catch it. Comparing the creation FILETIME read from the OPENED
+    HANDLE against the one observed at enumeration identifies the process INSTANCE, and
+    a mismatch is refused rather than guessed at.
+
+    Fails closed throughout: anything that cannot be positively identified is left
+    alone and counted in `refused`.
+
+    TerminateProcess is ASYNCHRONOUS - a True return means termination was requested,
+    not that the process is gone and its file locks are released. So each handle is
+    waited on briefly and `confirmed_exited` counts only the ones actually observed to
+    have exited. The caller must not describe the rest as stopped.
+    """
+    terminated = already_gone = refused = failed = confirmed = 0
+
+    for entry in processes:
+        handle = KERNEL32.OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+            | PROCESS_SYNCHRONIZE, False, entry.pid)
+        if not handle or handle == _INVALID_HANDLE:
+            # Gone already, or not ours to open. Either way, nothing to do.
+            already_gone += 1
+            continue
+        try:
+            actual = _creation_filetime(handle)
+            if actual is None or not same_process_instance(entry.created, actual):
+                refused += 1
+                _log.error("panic refused pid %d: identity changed since enumeration "
+                           "(PID was reused)", entry.pid)
+                continue
+            if not KERNEL32.TerminateProcess(handle, 1):
+                failed += 1
+                continue
+            terminated += 1
+            if KERNEL32.WaitForSingleObject(
+                    handle, config.PANIC_EXIT_WAIT_MS) == _WAIT_OBJECT_0:
+                confirmed += 1
+        finally:
+            KERNEL32.CloseHandle(handle)
+
+    if refused or failed:
+        _log.warning("panic termination: %d refused, %d failed", refused, failed)
+    return TerminationReport(terminated, already_gone, refused, failed, confirmed)
 
 
 def find_browser_window(pids: set[int]) -> int | None:

@@ -12,6 +12,7 @@ underlying disk blocks are unrecoverable, nor that Windows kept no artefact else
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import shutil
@@ -42,6 +43,17 @@ NOT_GUARANTEED = (
     "Anything the site sent to its own servers",
     "Windows-level artefacts outside the profile folder",
     "Forensic recovery of deleted disk blocks",
+    # Spelled out because bruhswer now DOES overwrite files before deleting them, and
+    # an overwrite is the single easiest thing in this field to over-read. Writing new
+    # bytes to a file changes the LOGICAL contents at that path. It does not follow
+    # that the physical media no longer holds the old bytes:
+    #   - an SSD's controller does wear levelling, so a rewrite usually lands on a
+    #     different physical page and the original is left behind until it is garbage
+    #     collected, on the drive's schedule and outside anything bruhswer can see
+    #   - NTFS journals metadata, and small files can live entirely inside the MFT
+    #   - a copy may exist in a shadow copy, a restore point, or the page file
+    # bruhswer cannot inspect any of that, so it does not claim any of it.
+    "That overwriting a file removed the old bytes from the physical disk",
 )
 
 
@@ -135,10 +147,10 @@ def _safe_to_delete(candidate: Path, expected_root: Path) -> bool:
     win that race is already running as the user, which the threat model states is not
     defended against.
     """
-    _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
     try:
         info = candidate.stat(follow_symlinks=False)
-        if getattr(info, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT:
+        if (getattr(info, "st_file_attributes", 0)
+                & config.FILE_ATTRIBUTE_REPARSE_POINT):
             _log.error("refusing to delete a reparse point where a folder was expected")
             return False
         resolved = candidate.resolve()
@@ -161,6 +173,157 @@ def _safe_session_folder(session_id: str) -> str:
     real work on untrusted text.
     """
     return "".join(c for c in session_id if c in "0123456789abcdef")[:32] or "session"
+
+
+@dataclass(frozen=True)
+class OverwriteReport:
+    """Exactly what the overwrite pass did. Every field is reported to the user.
+
+    `skipped_large` and `skipped_unreadable` are not bookkeeping - they are the
+    difference between "312 files were overwritten" and "312 files were overwritten and
+    6 were not". Reporting only the successes would create precisely the false
+    impression of coverage that this project treats as a defect.
+    """
+
+    overwritten: int = 0
+    skipped_large: int = 0
+    skipped_unreadable: int = 0
+    skipped_reparse: int = 0
+
+    @property
+    def skipped(self) -> int:
+        return self.skipped_large + self.skipped_unreadable + self.skipped_reparse
+
+    def summary(self) -> str:
+        """One clause for the destruction message, or empty if nothing was touched."""
+        if not self.overwritten and not self.skipped:
+            return ""
+        parts = [f"{self.overwritten} file(s) were overwritten with random bytes first"]
+        if self.skipped_large:
+            parts.append(f"{self.skipped_large} too large to overwrite quickly")
+        if self.skipped_unreadable:
+            parts.append(f"{self.skipped_unreadable} could not be opened")
+        if self.skipped_reparse:
+            parts.append(f"{self.skipped_reparse} were links and were left alone")
+        tail = "; ".join(parts[1:])
+        return f" {parts[0]}" + (f" ({tail})" if tail else "") + "."
+
+
+def _overwrite_tree(root: Path, expected_root: Path) -> OverwriteReport:
+    """Overwrite every ordinary file under `root` with random bytes. Best effort.
+
+    WHAT THIS IS: a cheap extra step that makes the profile's contents unrecoverable by
+    ordinary means - an undelete tool, a file browser, someone reading the free list.
+
+    WHAT THIS IS NOT: erasure. See NOT_GUARANTEED above. The one-line version is that
+    an SSD's wear levelling means the new bytes usually land on a different physical
+    page and the old page survives until the drive garbage-collects it, which bruhswer
+    can neither observe nor influence. This function's name says "overwrite" and not
+    "wipe" or "secure delete" on purpose.
+
+    THE DANGEROUS PART, and why the walk is hand-rolled instead of os.walk:
+        This function OPENS FILES FOR WRITING inside a directory tree. That makes it a
+        destructive primitive, and a reparse point anywhere in that tree would aim it
+        somewhere else - a junction planted under the disposable-profile root by
+        anything running as the user, including a compromised browser process, is a
+        perfectly ordinary-looking folder.
+
+        So every directory is checked for FILE_ATTRIBUTE_REPARSE_POINT before it is
+        descended into, and every file is checked before it is opened, and each
+        resolved path is re-confirmed to sit inside `expected_root`. This is the same
+        discipline _safe_to_delete applies before rmtree, applied per entry, because
+        here the check has to hold at every level rather than once at the top.
+
+        os.walk is not used because its handling of Windows junctions depends on
+        version-specific behaviour of os.scandir, and this is not a place to inherit a
+        subtlety from the standard library.
+
+    Failure is never fatal: deletion is what actually removes the data, and refusing to
+    delete because an overwrite failed would trade the guarantee bruhswer HAS for one
+    it does not.
+    """
+    # A dict rather than four `nonlocal` counters: the recursive walk below has to
+    # accumulate across every level, and a plain mutable mapping keeps that explicit
+    # instead of scattering rebinding rules through a nested function.
+    counts = {"overwritten": 0, "large": 0, "unreadable": 0, "reparse": 0}
+
+    def is_reparse(path: Path) -> bool:
+        try:
+            info = path.stat(follow_symlinks=False)
+        except OSError:
+            return True         # cannot tell -> treat as unsafe
+        return bool(getattr(info, "st_file_attributes", 0)
+                    & config.FILE_ATTRIBUTE_REPARSE_POINT)
+
+    def contained(path: Path) -> bool:
+        try:
+            return path.resolve().is_relative_to(expected_root)
+        except (OSError, ValueError):
+            return False
+
+    def walk(directory: Path) -> None:
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            counts["unreadable"] += 1
+            return
+
+        for entry in entries:
+            if is_reparse(entry):
+                counts["reparse"] += 1
+                _log.warning("overwrite skipped a reparse point inside the profile")
+                continue
+            if not contained(entry):
+                counts["reparse"] += 1
+                continue
+            try:
+                if entry.is_dir():
+                    walk(entry)
+                    continue
+                if not entry.is_file():
+                    continue
+                size = entry.stat().st_size
+            except OSError:
+                counts["unreadable"] += 1
+                continue
+
+            if size > config.DISPOSABLE_OVERWRITE_MAX_BYTES:
+                counts["large"] += 1
+                continue
+            if _overwrite_file(entry, size):
+                counts["overwritten"] += 1
+            else:
+                counts["unreadable"] += 1
+
+    walk(root)
+    return OverwriteReport(counts["overwritten"], counts["large"],
+                           counts["unreadable"], counts["reparse"])
+
+
+def _overwrite_file(path: Path, size: int) -> bool:
+    """Write `size` random bytes over one file. True if it was fully written.
+
+    os.urandom rather than zeros: a run of zeros is trivially recognisable as a wiped
+    region, and random bytes cost the same. flush + fsync because a buffered write that
+    never reached the platter before the file was unlinked would have overwritten
+    nothing at all.
+    """
+    if size == 0:
+        return True
+    try:
+        with path.open("r+b") as handle:
+            remaining = size
+            while remaining > 0:
+                chunk = min(remaining, config.OVERWRITE_CHUNK_BYTES)
+                handle.write(os.urandom(chunk))
+                remaining -= chunk
+            handle.flush()
+            os.fsync(handle.fileno())
+        return True
+    except OSError:
+        # Locked by a still-running browser process is the common case, and it is not
+        # an error worth failing the close over.
+        return False
 
 
 def destroy(session: Session) -> tuple[bool, str]:
@@ -200,6 +363,11 @@ def destroy(session: Session) -> tuple[bool, str]:
     # than claiming "destroyed" and leaving the user to guess what that covered.
     quarantined = pending_quarantine(session)
 
+    # Overwrite BEFORE the delete, because after rmtree there is nothing left to write
+    # over. Best effort by design: if this does nothing at all, the delete below still
+    # removes the data, and that is the guarantee bruhswer actually makes.
+    overwrite = _overwrite_tree(target, root)
+
     shutil.rmtree(target, ignore_errors=True)
     if target.exists():
         leftover = sum(1 for _ in target.rglob("*"))
@@ -216,6 +384,9 @@ def destroy(session: Session) -> tuple[bool, str]:
         if not _safe_to_delete(q_dir, q_root):
             return False, ("Profile destroyed, but the session's quarantine folder "
                            "could not be verified as safe to delete and was kept.")
+        # The quarantine holds whole files the user downloaded from the web, so it is
+        # if anything the more sensitive of the two trees. Same treatment.
+        _overwrite_tree(q_dir, q_root)
         shutil.rmtree(q_dir, ignore_errors=True)
         if q_dir.exists():
             remaining = sum(1 for _ in q_dir.rglob("*"))
@@ -227,9 +398,13 @@ def destroy(session: Session) -> tuple[bool, str]:
             quarantine_note = (f" {len(quarantined)} quarantined download(s) were "
                                f"destroyed with it.")
 
-    _log.info("destroyed disposable session %s (%d quarantined file(s))",
-              session.session_id, len(quarantined))
-    return True, ("Session profile destroyed and verified gone." + quarantine_note)
+    _log.info("destroyed disposable session %s (%d quarantined file(s), "
+              "%d overwritten, %d skipped)", session.session_id, len(quarantined),
+              overwrite.overwritten, overwrite.skipped)
+    # The overwrite summary names what was NOT covered as well as what was. Reporting
+    # only the successes would imply a completeness the pass does not have.
+    return True, ("Session profile destroyed and verified gone."
+                  + quarantine_note + overwrite.summary())
 
 
 def sweep_orphans() -> int:

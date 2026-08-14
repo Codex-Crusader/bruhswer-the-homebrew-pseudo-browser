@@ -559,7 +559,12 @@ def section_d_claims_match_measurements() -> None:
     print("\nD. bruhswer's claims match what was just measured  (asserted)")
 
     reached = {t for t, v, _ in _findings if v == "NOT ENFORCEABLE"}
-    summary = dict(network_guard.policy_summary())
+    # policy_summary() returns a typed PolicyState, not prose - it was changed away
+    # from display strings precisely because two UIs were pattern-matching that prose
+    # and both broke when a state was added. str() gives the stable display value, so
+    # these assertions compare what the user actually sees.
+    summary = {label: str(state)
+               for label, state in network_guard.policy_summary()}
 
     loopback_reached = any("loopback" in t or "localhost" in t for t in reached)
 

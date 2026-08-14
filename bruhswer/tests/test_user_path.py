@@ -202,6 +202,10 @@ def main() -> int:
     if not outcome.launched:
         return 1
     session = outcome.session
+    # Narrowed explicitly. A launched outcome always carries a session, and
+    # stating that lets the accesses below read as Session rather than
+    # Session | None.
+    assert session is not None, "launch reported success without a session"
 
     qdir = quarantine.quarantine_dir_for(session.session_id)
     ok, detail = privacy_guard.verify_download_directory(session.profile_dir, qdir)
@@ -290,6 +294,7 @@ def main() -> int:
     if not outcome.launched:
         return 1
     disposable = outcome.session
+    assert disposable is not None, "disposable launch reported no session"
     time.sleep(12)
     check("disposable profile exists while running", disposable.profile_dir.is_dir())
 

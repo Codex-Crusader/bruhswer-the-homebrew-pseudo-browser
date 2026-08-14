@@ -12,6 +12,7 @@ never coloured green, whatever it would do to the joke.
 
 from __future__ import annotations
 
+import functools
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -21,8 +22,9 @@ from ..downloads import quarantine
 from ..host import host_guard
 from ..network import network_guard
 from ..privacy import privacy_guard
+from ..security import verifier
 from ..sessions import session_manager
-from .panels import chrome
+from .panels import chrome, network_panel
 
 # Derived from panels.chrome, never restated: this module used to keep its own copy and
 # could drift from the browser window.
@@ -38,7 +40,8 @@ class BruhswerUI:
         self.root.configure(bg=config.BG_DARK)
         self.root.geometry("880x720")
         self.root.minsize(760, 620)
-        self._result = None
+        # Annotated for the same reason as BrowserWindow.result - see the note there.
+        self._result: verifier.VerificationResult | None = None
 
         # Declared here so the whole of this window's state is visible in one place.
         # Annotation only, no assignment: that registers the attribute without
@@ -59,6 +62,20 @@ class BruhswerUI:
 
         self._build()
         self.refresh()
+
+    @property
+    def _checked(self) -> verifier.VerificationResult:
+        """The current verification result, which every render path requires.
+
+        refresh() sets `_result` before any render runs, so this precondition already
+        held - it was just implicit, which left every `self._checked.checks` reading as
+        an attribute access on None to any checker. Raising here states the contract
+        instead of hiding it behind an AttributeError.
+        """
+        result = self._result
+        if result is None:
+            raise RuntimeError("render called before refresh(): no result yet")
+        return result
 
     # --- construction -----------------------------------------------------------
 
@@ -178,11 +195,14 @@ class BruhswerUI:
         for label, state in network_guard.policy_summary():
             row = tk.Frame(body, bg=config.BG_DARK)
             row.pack(fill="x", padx=18, pady=2)
-            colour = {"ALLOWED": config.FG_DIM, "BLOCKED": config.OK_GREEN,
-                      "NOT ENFORCEABLE": config.BAD_RED}[state]
+            # The SHARED map, not a second inline copy. This dict was the other
+            # half of the same defect: it also lacked the new IPv6 state, so the
+            # --panel UI would have died with a KeyError building this tab.
+            colour = network_panel.state_colour(state)
             tk.Label(row, text=label, font=("Segoe UI", 10), width=26, anchor="w",
                      bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
-            tk.Label(row, text=state, font=("Consolas", 10, "bold"),
+            tk.Label(row, text=network_panel.state_label(state),
+                     font=("Consolas", 10, "bold"),
                      bg=config.BG_DARK, fg=colour).pack(side="left")
 
         self._note(body,
@@ -273,7 +293,7 @@ class BruhswerUI:
         self._render_host()
         self._render_downloads()
 
-        blockers = self._result.blockers
+        blockers = self._checked.blockers
         if blockers:
             self.status_line.config(
                 text="BRUH. NO. " + "; ".join(c.title for c in blockers),
@@ -288,7 +308,7 @@ class BruhswerUI:
         self._clear(body)
 
         self._section(body, "Bruh check")
-        for name, verdict, blurb in ctrl.summarise(self._result):
+        for name, verdict, blurb in ctrl.summarise(self._checked):
             row = tk.Frame(body, bg=config.BG_DARK)
             row.pack(fill="x", padx=18, pady=2)
             glyph, colour = _DOT[verdict]
@@ -322,12 +342,12 @@ class BruhswerUI:
                      fg=config.FG_DIM).pack(side="left")
 
         self._section(body, "Security  -  can something reach my stuff")
-        for check in self._result.checks:
+        for check in self._checked.checks:
             if check.check_id.split(".")[0] in ("edge", "browser", "net", "controller"):
                 self._check_row(body, check)
 
         self._section(body, "Privacy  -  what can a website learn")
-        for check in self._result.checks:
+        for check in self._checked.checks:
             if check.check_id.split(".")[0] in ("privacy", "dns", "downloads"):
                 self._check_row(body, check)
 
@@ -341,7 +361,7 @@ class BruhswerUI:
     def _render_host(self) -> None:
         body = self.host_body
         self._clear(body)
-        checks = self._result.by_prefix("host.")
+        checks = self._checked.by_prefix("host.")
 
         self._section(body, "Host guard  -  what other devices on this network can reach")
         for check in checks:
@@ -404,11 +424,13 @@ class BruhswerUI:
             tk.Button(buttons, text="Export...", bd=0, padx=12, pady=4,
                       font=("Segoe UI", 9), bg=config.BG_RAISED,
                       fg=config.BRAND_WHITE, cursor="hand2",
-                      command=lambda i=item: self.on_export(i)).pack(side="left")
+                      command=functools.partial(self.on_export, item)
+                      ).pack(side="left")
             tk.Button(buttons, text="Delete", bd=0, padx=12, pady=4,
                       font=("Segoe UI", 9), bg=config.BG_RAISED,
                       fg=config.BRAND_WHITE, cursor="hand2",
-                      command=lambda i=item: self.on_delete(i)).pack(side="left", padx=6)
+                      command=functools.partial(self.on_delete, item)
+                      ).pack(side="left", padx=6)
 
     def on_launch(self) -> None:
         outcome = self.controller.start(self.mode_var.get())

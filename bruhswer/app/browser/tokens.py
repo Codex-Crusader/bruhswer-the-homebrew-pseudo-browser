@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..logging_setup import get_logger
@@ -143,15 +144,34 @@ def read(pid: int) -> TokenFacts:
         KERNEL32.CloseHandle(wt.HANDLE(handle))
 
 
-def summarise_renderers(renderer_pids: list[int]) -> dict:
-    """What is actually true of this session's renderer processes right now."""
+def summarise_renderers(renderer_pids: Sequence[int]) -> dict:
+    """What is actually true of this session's renderer processes right now.
+
+    `unreadable` IS PART OF THE ANSWER, and leaving it out was a real defect.
+
+    This function used to return only the readable tokens, and the caller compared
+    `untrusted == measured` to decide PASS. With three renderers running and one token
+    that could not be opened, `measured` was 2, `untrusted` was 2, and the check went
+    green -- reporting "All 2 renderer process(es) run at UNTRUSTED integrity" while a
+    third renderer, whose containment was completely unknown, was hosting page content.
+
+    Measured directly, not reasoned about: patching `read` so PID 3 returns
+    readable=False and PIDs 1-2 return UNTRUSTED produced verdict PASS. A process that
+    was never measured was being counted as a process that passed, which is the exact
+    thing this project treats as a vulnerability rather than a reporting nit.
+
+    So the count of processes we FAILED to measure is now returned alongside the ones we
+    did, and the caller is responsible for refusing to go green while it is non-zero.
+    """
     facts = [read(pid) for pid in renderer_pids]
     readable = [f for f in facts if f.readable]
+    unreadable = len(facts) - len(readable)
     if not readable:
-        return {"measured": 0, "appcontainer": 0, "untrusted": 0,
-                "zero_privileges": 0, "worst_integrity": None}
+        return {"measured": 0, "unreadable": unreadable, "appcontainer": 0,
+                "untrusted": 0, "zero_privileges": 0, "worst_integrity": None}
     return {
         "measured": len(readable),
+        "unreadable": unreadable,
         "appcontainer": sum(1 for f in readable if f.is_appcontainer),
         "untrusted": sum(1 for f in readable if f.integrity == "UNTRUSTED"),
         "zero_privileges": sum(1 for f in readable if f.privilege_count == 0),

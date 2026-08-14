@@ -8,9 +8,23 @@ from ... import config
 from ...network import network_guard
 from . import chrome
 
-_STATE_COLOUR = {"ALLOWED": config.FG_DIM,
-                 "BLOCKED": config.OK_GREEN,
-                 "NOT ENFORCEABLE": config.WARN_AMBER}
+def state_colour(state) -> str:
+    """Colour for one PolicyState. Shared by every UI - see config.POLICY_STATE_COLOUR.
+
+    Never raises. The strict `dict[state]` this replaced took the whole Network panel
+    offline with a KeyError the moment policy_summary() gained a fourth state; a
+    missing colour must degrade to a loud colour, not to no panel.
+    """
+    return config.POLICY_STATE_COLOUR.get(
+        str(state), config.POLICY_STATE_UNKNOWN_COLOUR)
+
+
+def state_label(state) -> str:
+    """What to print. An unrecognised state says so rather than showing raw prose."""
+    text = str(state)
+    if text in config.POLICY_STATE_COLOUR:
+        return text
+    return f"{config.POLICY_STATE_UNKNOWN_LABEL}: {text}"
 
 _NO_VPN = ("No VPN is configured and no kill switch has been demonstrated. bruhswer "
            "will not pretend to offer one.")
@@ -19,7 +33,7 @@ _NO_VPN = ("No VPN is configured and no kill switch has been demonstrated. bruhs
 def render(body: tk.Misc, result) -> None:
     chrome.heading(body, "What the browser may reach")
     for label, state in network_guard.policy_summary():
-        chrome.line(body, label, state, _STATE_COLOUR[state])
+        chrome.line(body, label, state_label(state), state_colour(state))
 
     chrome.heading(body, "DNS and VPN")
     for check in [c for c in (result.checks if result else [])

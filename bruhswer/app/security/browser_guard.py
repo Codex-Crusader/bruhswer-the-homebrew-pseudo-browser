@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import getpass
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from .. import config
@@ -203,7 +204,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
     return checks
 
 
-def verify_renderer_sandbox(renderer_pids: list[int]) -> list[Check]:
+def verify_renderer_sandbox(
+        renderer_pids: Sequence[int] | None) -> list[Check]:
     """MEASURE the renderer sandbox, rather than asserting it.
 
     This check used to be a hardcoded PASS quoting a Stage 4 measurement taken on one
@@ -214,6 +216,23 @@ def verify_renderer_sandbox(renderer_pids: list[int]) -> list[Check]:
     With no session running there is nothing to measure, and the honest answer is
     UNKNOWN.
     """
+    # THREE distinct situations, three distinct messages. They used to share one.
+    #
+    # None    the query failed - a PowerShell timeout, or the process could not start.
+    #         Saying "no browser session is running" here is a false statement about
+    #         the world, and it is the one the user is most likely to see while
+    #         actually browsing.
+    # []      the query succeeded and there are genuinely no renderers.
+    # [...]   measure them.
+    if renderer_pids is None:
+        return [Check(
+            "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
+            critical=False,
+            detail=("bruhswer could not ask Windows which renderer processes are "
+                    "running, so it cannot say whether page content is contained. "
+                    "This is a failed measurement, not a finding about the browser."),
+            evidence="renderer pid query failed")]
+
     if not renderer_pids:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
@@ -223,6 +242,7 @@ def verify_renderer_sandbox(renderer_pids: list[int]) -> list[Check]:
 
     facts = tokens.summarise_renderers(renderer_pids)
     measured = facts["measured"]
+    unreadable = facts["unreadable"]
     if measured == 0:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
@@ -232,6 +252,25 @@ def verify_renderer_sandbox(renderer_pids: list[int]) -> list[Check]:
 
     contained = facts["untrusted"]
     appcontainer = facts["appcontainer"]
+
+    # A renderer whose token could not be read is NOT evidence of containment, and it
+    # must not be quietly dropped from the denominator. Doing exactly that is what let
+    # this check report "All 2 renderer process(es) run at UNTRUSTED integrity" while a
+    # third renderer ran unmeasured -- see summarise_renderers for the measurement.
+    #
+    # Ordered before the PASS branch on purpose: partial evidence is UNKNOWN, and
+    # UNKNOWN is an acceptable answer here. Rounding it up to PASS is not.
+    if unreadable:
+        return [Check(
+            "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
+            critical=False,
+            detail=(f"{unreadable} of {measured + unreadable} renderer process(es) "
+                    f"could not have their tokens read, so bruhswer cannot say whether "
+                    f"page content is contained. The {measured} it could read were "
+                    f"{contained} UNTRUSTED. This is reported as UNKNOWN rather than "
+                    f"passing on the ones that happened to be readable."),
+            evidence=f"pids={len(renderer_pids)} readable={measured} "
+                     f"unreadable={unreadable} untrusted={contained}")]
 
     if contained == measured:
         verdict = Verdict.PASS
@@ -253,7 +292,8 @@ def verify_renderer_sandbox(renderer_pids: list[int]) -> list[Check]:
 
     return [Check("browser.sandbox", "Renderer sandbox (measured)", verdict,
                   critical=False, detail=detail,
-                  evidence=f"measured={measured} untrusted={contained} "
+                  evidence=f"measured={measured} unreadable={unreadable} "
+                           f"untrusted={contained} "
                            f"appcontainer={appcontainer} "
                            f"zero_privileges={facts['zero_privileges']} "
                            f"worst_integrity={facts['worst_integrity']}")]

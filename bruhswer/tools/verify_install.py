@@ -82,6 +82,35 @@ def main(setup: Path) -> int:
     check("uninstaller present",
           (APP / "uninstall").is_dir() or any(APP.glob("unins*.exe")))
 
+    # THE FILE MANIFEST. Asserted here because this is the only place that looks at a
+    # REAL install, and the failure it guards against is silent: if the .iss pattern
+    # ever stops shipping non-.py files under app\, or .gitignore swallows the
+    # manifest, then every installed copy reports "no manifest shipped" and the drift
+    # check does nothing - while passing its entire unit suite in the dev tree, where
+    # the manifest is always present.
+    #
+    # It is also checked for FRESHNESS, not just presence. Regenerating the manifest
+    # must be the LAST build step; a manifest generated before the final source edit
+    # ships a build that reports FAIL on a perfectly good install, which teaches the
+    # user to ignore the one indicator that would have told them something real.
+    manifest = PKG / "app" / "security" / "MANIFEST.sha256"
+    check("file manifest shipped", manifest.is_file(), str(manifest))
+
+    if manifest.is_file():
+        verdict = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); "
+             "from app.security import integrity; "
+             "r = integrity.check_tree(); "
+             "print('OK' if r.ok else 'DRIFT', r.matched, r.total, "
+             "r.changed[:3], r.missing[:3], r.unexpected[:3])",
+             str(PKG)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, shell=False)
+        out = (verdict.stdout or "").strip()
+        check("installed files match the shipped manifest", out.startswith("OK"),
+              out or (verdict.stderr or "")[:160])
+
     print("\n3. What must NOT have shipped")
     for junk in ("tests", ".venv", "profiles", "logs", ".git", "__pycache__"):
         check(f"no {junk}/ in the install",

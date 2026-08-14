@@ -155,7 +155,9 @@ def sid_to_string(psid) -> str:
         return "<ConvertSidToStringSid failed>"
     s = out.value
     kernel32.LocalFree(ctypes.c_void_p(ctypes.cast(out, ctypes.c_void_p).value))
-    return s
+    # c_wchar_p.value is Optional. The conversion above succeeded, so it is set - but
+    # this function promises a str, so the fallback is stated rather than assumed.
+    return s if s is not None else "<empty SID string>"
 
 
 def string_to_sid(s: str) -> ctypes.c_void_p:
@@ -228,8 +230,11 @@ def launch_in_appcontainer(cmdline: str, container_sid, caps: list, cwd=None):
 
 def token_facts(pid: int) -> dict:
     """Read AppContainer SID and integrity level for a PID. Host-side measurement."""
-    facts = {"pid": pid, "opened": False, "is_appcontainer": None,
-             "package_sid": None, "integrity": None}
+    # Annotated: without it the literal below fixes the value type as int | None from
+    # its first entries, and every later string or bool written into it reads as a type
+    # error. This is a measurement record with deliberately mixed value types.
+    facts: dict[str, object] = {"pid": pid, "opened": False, "is_appcontainer": None,
+                                "package_sid": None, "integrity": None}
     h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h or h == INVALID_HANDLE_VALUE:
         facts["error"] = "OpenProcess failed (%d)" % ctypes.get_last_error()

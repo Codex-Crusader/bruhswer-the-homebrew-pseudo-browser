@@ -75,7 +75,11 @@ def main():
     if len(sys.argv) > 2:
         sys.stdout = _Tee(sys.argv[2])
 
-    if not ctypes.windll.shell32.IsUserAnAdmin():
+    # ctypes.WinDLL(...) rather than ctypes.windll.X. Identical at runtime, but
+    # `windll` is declared only for win32 in the type stubs, so every checker
+    # reports it as an unresolved reference. The explicit form is also what the
+    # rest of this codebase already uses (see app/browser/embed.py).
+    if not ctypes.WinDLL("shell32").IsUserAnAdmin():
         print("REFUSING TO RUN: requires elevation.")
         return 2
 

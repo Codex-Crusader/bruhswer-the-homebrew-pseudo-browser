@@ -1,6 +1,9 @@
 # Testing
 
-**152 assertions across 7 suites, 0 failures.**
+**240 assertions across 13 suites, 0 failures.**
+
+Counts are read from the run output, never carried forward from a previous release -
+this number has drifted before when it was retyped from memory.
 
 More usefully: what the tests actually establish, and what they deliberately do not.
 

@@ -42,7 +42,10 @@ def _collect_names(tree: ast.AST) -> set[str]:
         if isinstance(node, ast.Name):
             used.add(node.id)
         elif isinstance(node, ast.Attribute):
-            cur = node
+            # Annotated as the general expression type: this starts as an Attribute but
+            # walks down to whatever the chain's base is, so inferring the type from the
+            # first assignment makes every later step look like a type error.
+            cur: ast.expr = node
             while isinstance(cur, ast.Attribute):
                 cur = cur.value
             if isinstance(cur, ast.Name):
@@ -79,11 +82,14 @@ def check_functions(tree: ast.AST, report: FileReport) -> None:
                 else:
                     used.add(sub.id)
             elif isinstance(sub, ast.Attribute):
-                cur = sub
-                while isinstance(cur, ast.Attribute):
-                    cur = cur.value
-                if isinstance(cur, ast.Name):
-                    used.add(cur.id)
+                # Annotated as the general expression type: this starts as an Attribute but
+                # walks down to whatever the chain's base is, so inferring the type from the
+                # first assignment makes every later step look like a type error.
+                base: ast.expr = sub
+                while isinstance(base, ast.Attribute):
+                    base = base.value
+                if isinstance(base, ast.Name):
+                    used.add(base.id)
         for name, line in assigned.items():
             if name.startswith("_"):
                 continue
@@ -148,6 +154,35 @@ def check_static_candidates(tree: ast.AST, report: FileReport) -> None:
                            f"{cls.name}.{node.name}() never uses self")
 
 
+# Inline suppression marker, e.g.
+#     except Exception:            # lint: allow broad-except - reason
+#     win._placeholder = False     # lint: allow protected-access - drives the real UI
+#
+# PER SITE, and deliberately not a global switch for a rule. Turning a rule off across
+# the project would silence the NEXT occurrence too - a new broad `except` in shipped
+# code, or a new reach into another module's internals - which is the opposite of what
+# a linter is for. An inline marker keeps the rule live everywhere else and leaves the
+# exemption visible on the line it applies to, where a reviewer will actually see it.
+#
+# The trailing reason is not parsed; it is there for the human reading the line.
+_SUPPRESS = "# lint: allow "
+
+
+def _suppressed_lines(source: str) -> dict[int, set[str]]:
+    """line number -> rule names suppressed on that line."""
+    out: dict[int, set[str]] = {}
+    for number, text in enumerate(source.splitlines(), start=1):
+        marker = text.find(_SUPPRESS)
+        if marker == -1:
+            continue
+        rest = text[marker + len(_SUPPRESS):].strip()
+        # Everything up to an optional " - reason" is the rule list.
+        rules = rest.split(" - ")[0].replace(",", " ").split()
+        if rules:
+            out[number] = set(rules)
+    return out
+
+
 def scan(path: Path) -> FileReport:
     report = FileReport(path)
     source = path.read_text(encoding="utf-8-sig")
@@ -158,6 +193,11 @@ def scan(path: Path) -> FileReport:
     check_protected_access(tree, report)
     check_static_candidates(tree, report)
     check_instance_attrs(tree, report)
+
+    suppressed = _suppressed_lines(source)
+    report.findings = [
+        (line, kind, message) for line, kind, message in report.findings
+        if kind not in suppressed.get(line, ())]
     return report
 
 

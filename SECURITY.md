@@ -113,7 +113,25 @@ Stated plainly, because a security policy that only lists strengths is marketing
 - It **cannot** confirm whether your DNS queries leave the machine encrypted, and
   reports `UNKNOWN` rather than guessing.
 - It does **not** detect malware. Quarantine means a file was not let out. It does not
-  mean the file is safe.
+  mean the file is safe. bruhswer reads a downloaded file's first bytes and will tell
+  you when the *content* is a program and the *filename* claims otherwise - that is a
+  format observation, not a safety verdict, and "nothing recognised" is not "clean".
+- It **cannot** prove the IPv6 firewall rule stops the browser. The rule is verified as
+  present and correctly formed; its *effect* was never measured, unlike the IPv4 rule.
+  Reported as `RULE SET, EFFECT NOT MEASURED`, never as `BLOCKED`.
+- The file manifest is **drift detection, not tamper protection**. It catches damage,
+  partial installs and untargeted modification. It does not resist an attacker, who
+  could regenerate the manifest and edit the checker alongside the code.
+- Overwriting a disposable profile before deleting it does **not** establish physical
+  erasure. On an SSD, wear levelling means the rewrite usually lands on a different
+  physical page and the original survives until the drive garbage-collects it; NTFS
+  also journals metadata. bruhswer cannot observe any of that and does not claim it.
+- The panic key is a **global Windows hotkey**, so another application can own it. When
+  that happens bruhswer says `UNAVAILABLE` rather than substituting a weaker key.
+- Address sanitising refuses invisible, direction-reversing and credential-hiding URLs.
+  It does **not** detect homoglyphs - a domain spelled with a Cyrillic lookalike is
+  ordinary visible text and passes. Refusing all non-ASCII hosts would break legitimate
+  internationalised domains, and a partial lookalike table would be a false claim.
 - Release artifacts are **unsigned**. See the release notes.
 
 ## Security design

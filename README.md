@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.9.2-F5C518?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.10.0-F5C518?style=flat-square">
   <img alt="status" src="https://img.shields.io/badge/status-research--grade%20beta-F5C518?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-333?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-152%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-240%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -93,7 +93,7 @@ the UI says so in the user's face rather than quietly rounding up.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | Measured platform boundaries - the honest part |
-| [`docs/TESTING.md`](docs/TESTING.md) | What the 152 assertions actually prove, and what they can't |
+| [`docs/TESTING.md`](docs/TESTING.md) | What the 240 assertions actually prove, and what they can't |
 | [`docs/SECURITY-TESTING.md`](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [`docs/research/`](docs/research/) | Three isolation backends built, measured and rejected. History, not guidance |
 
@@ -150,6 +150,10 @@ Everything below is **measured on real hardware**, not inferred from documentati
 | 🕵️ | **Privacy settings** - written into the profile and **read back** to confirm they stuck. | Verified |
 | 🏠 | **Host Guard** - tells you what other devices on the Wi-Fi can reach on *your* PC. | Verified |
 | ✍️ | **Signed browser only** - Edge's Authenticode signature is checked on every launch. | Verified |
+| 🔁 | **Re-checked while you browse** - every check re-runs on a background thread once a minute. A control that stops holding **downgrades its own light** and says so. | Verified |
+| ⏱️ | **Panic key** - `Ctrl+Shift+End` terminates *this session's* browser immediately. Never touches your own Edge. | Measured |
+| 🧾 | **File manifest** - bruhswer SHA-256s its own source at startup against the list it shipped with. | Verified |
+| 🔗 | **Address sanitising** - invisible, direction-reversing and credential-hiding URLs are refused, not silently cleaned up. | Verified |
 | 🚫 | **No telemetry** - bruhswer contains no network client. None. It cannot phone home. | By construction |
 
 ### The two ideas underneath
@@ -198,6 +202,54 @@ Read this part twice. It is the part most projects leave out.
 >
 > bruhswer reports this as `NOT ENFORCEABLE` everywhere you can see it, and a
 > regression test **fails the build** if it is ever described as anything else.
+
+> ### 📡 The IPv6 rule is set. Nobody has proved it works.
+>
+> bruhswer configures an outbound Block rule for the IPv6 local ranges
+> (`fc00::/7`, `fe80::/10`) and verifies on every launch that the rule is present,
+> enabled, scoped to the browser and covering both ranges.
+>
+> **What was never done is the other half.** The IPv4 rule was measured empirically -
+> the router went REACHED → BLOCKED → REACHED as the rule was applied and removed.
+> There is no equivalent IPv6 result, and bruhswer cannot produce one from inside
+> itself: the rules are scoped to `msedge.exe`, so a probe sent from bruhswer's own
+> process would prove nothing about the browser - the identical mistake that made the
+> original localhost claim wrong.
+>
+> So the Network panel reads **`RULE SET, EFFECT NOT MEASURED`**, not `BLOCKED`. It
+> used to read `BLOCKED`, with exactly the same confidence as the rows that were
+> actually measured. That was an overclaim and it has been removed.
+
+> ### 🧾 The file manifest is drift detection, not tamper protection
+>
+> bruhswer hashes its own Python source at startup and compares it to a manifest that
+> shipped alongside it. This catches a damaged download, a partial upgrade, and
+> untargeted malware that rewrites files.
+>
+> **It does not stop an attacker.** The manifest sits in the same folder as the code,
+> and the code that checks the manifest sits next to both. Anyone who can edit
+> `verifier.py` can edit the manifest and the checker in the same motion. There is no
+> trust anchor outside the thing being checked, because bruhswer runs unelevated in a
+> directory you own.
+>
+> That is why the check is **non-critical** and titled *"Installed files match their
+> manifest"* rather than anything with the word *integrity* or *tamper* in it. A test
+> fails the build if that title ever grows one.
+
+> ### ⌨️ The panic key can be taken by another application
+>
+> `Ctrl+Shift+End` is a global Windows hotkey, so exactly one program can hold it. If
+> another application - including a second copy of bruhswer - registered it first,
+> bruhswer **cannot** have it.
+>
+> When that happens the PANIC light goes **red** and reads `UNAVAILABLE`, permanently,
+> for as long as it is true. There is deliberately no fallback to a key that only works
+> while bruhswer has focus: the whole point is to fire while the *browser* has focus,
+> and offering a weaker key under the same name would be a promise bruhswer cannot keep.
+>
+> The panic path also reports honestly. If it cannot confirm every browser process
+> reached a terminal state it says **"bruhswer could NOT confirm the browser stopped"**
+> rather than showing a green success.
 
 > ### 🪪 Edge signs itself in, and bruhswer cannot stop it
 >
@@ -358,8 +410,8 @@ recorded rollback.
 <table>
 <tr><td>
 
-**152** assertions across **7** suites, all passing, run repeatedly, zero known
-flaky tests. Against a real browser, a real firewall and a real network - not mocks.
+**240** assertions across **13** suites, all passing, run twice with identical
+results, zero known flaky tests. Against a real browser, a real firewall and a real network - not mocks.
 
 </td></tr>
 </table>

@@ -11,7 +11,7 @@
 
 [project]
 name = "bruhswer"
-version = "0.9.2"
+version = "0.10.0"
 description = "A measured, fail-closed security wrapper around Microsoft Edge on Windows."
 requires-python = ">=3.11"
 authors = [{ name = "Bhargavaram Krishnapur" }]

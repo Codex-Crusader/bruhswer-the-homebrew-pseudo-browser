@@ -31,6 +31,31 @@ WARN_AMBER = "#D29922"
 BAD_RED = "#F85149"
 OFF_GREY = "#6E7681"
 
+# Colour for each network_guard.PolicyState, by the state's VALUE so this module does
+# not have to import the network layer.
+#
+# ONE map, used by every UI. There used to be two - one in app/ui/panels/network_panel.py
+# and an inline one in app/ui/app_ui.py - and when policy_summary() gained a fourth
+# state both of them KeyError'd, taking the Network panel and the --panel UI offline.
+# Duplicated lookup tables keyed on another module's output do not stay in step.
+#
+# Only BLOCKED is green, and only because the rows carrying it rest on the empirical
+# gate-A16 measurement. A state whose text says it was not verified never renders in
+# the same colour as one that was.
+POLICY_STATE_COLOUR = {
+    "ALLOWED": FG_DIM,
+    "BLOCKED": OK_GREEN,
+    "RULE SET, EFFECT NOT MEASURED": WARN_AMBER,
+    "NOT ENFORCEABLE": WARN_AMBER,
+}
+
+# A state no UI has been taught. RED, deliberately: an unrecognised state means the
+# reporting contract between network_guard and the UI is broken, which is a louder
+# problem than any single row's verdict. Amber would quietly normalise a new,
+# unreviewed claim; green would be the defect this project exists to avoid.
+POLICY_STATE_UNKNOWN_COLOUR = BAD_RED
+POLICY_STATE_UNKNOWN_LABEL = "UNRECOGNISED POLICY STATE"
+
 # --- paths ---------------------------------------------------------------------
 # All BRUHWSER state lives under one directory. Nothing is written anywhere else.
 _LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
@@ -68,6 +93,95 @@ NO_WINDOW = 0x08000000
 SYSTEM32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
 POWERSHELL = SYSTEM32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
 ICACLS = SYSTEM32 / "icacls.exe"
+
+# FILE_ATTRIBUTE_REPARSE_POINT, from the Win32 file-attribute set.
+#
+# Named here rather than written as a bare 0x400 at each site, because it is the single
+# most load-bearing constant in bruhswer's delete and export paths and it was previously
+# duplicated three times across two modules. It is the test that actually detects a
+# directory junction: MEASURED in this project, Path.is_symlink() returns FALSE for a
+# junction created with `mklink /J`, so the obvious-looking symlink check is silently
+# inert against the exact thing it appears to defend against.
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+# --- runtime re-verification ----------------------------------------------------
+# A full verification starts 15 helper processes (14 PowerShell + 1 icacls).
+#
+# MEASURED, not estimated: one complete pass took 8.31 SECONDS on this machine and
+# produced 30 checks. That is the number that settles the design - a Tk `after()`
+# callback doing this would freeze the window for eight seconds, once a minute, for
+# the life of the session. It runs on a worker thread and never on the Tk thread.
+# See app/ui/verify_worker.py.
+#
+# 60s between cycles: long enough that the helper processes are a rounding error on
+# battery and CPU, short enough that a control which silently stopped applying is
+# surfaced while the user is still in the session that it affects.
+VERIFY_INTERVAL_SECONDS = 60.0
+
+# How often the Tk thread drains the worker's result queue. This is a cheap, non
+# blocking queue poll, NOT a verification, so it can be frequent without cost.
+VERIFY_DRAIN_MS = 250
+
+# Upper bound on how long teardown waits for the worker to notice it should stop.
+# The worker can be blocked inside a subprocess call with its own 60s timeout, so this
+# is a bounded join, not a guarantee - see the shutdown notes in verify_worker.py.
+VERIFY_JOIN_TIMEOUT_SECONDS = 2.0
+
+# Slice the worker sleeps in while waiting out VERIFY_INTERVAL_SECONDS, so a newly
+# submitted request is picked up promptly instead of waiting out the whole cycle.
+VERIFY_WAKE_POLL_SECONDS = 0.25
+
+# --- disposable session overwrite -----------------------------------------------
+# Before a disposable profile is deleted, its files are overwritten with random bytes.
+# This is HYGIENE, not an erasure guarantee - see session_manager.NOT_GUARANTEED and
+# the docstring on _overwrite_tree, which state exactly what it cannot promise.
+#
+# The size cap exists because a browser profile's cache is routinely hundreds of
+# megabytes to several gigabytes. Overwriting all of it would turn closing a session
+# into a multi-minute operation, and a user who cancels that gets neither the overwrite
+# nor a timely close. The small files are the ones that hold the identifying material -
+# Cookies, Login Data, History, Web Data, the Local Storage LevelDB - and they sit far
+# below this cap.
+#
+# Files ABOVE the cap are skipped and COUNTED, and the count is reported to the user.
+# Silently skipping them would be the false-coverage failure this project treats as a
+# defect in its own right.
+DISPOSABLE_OVERWRITE_MAX_BYTES = 8 * 1024 * 1024
+
+# Written in chunks so a large file never has to be held in memory at once.
+OVERWRITE_CHUNK_BYTES = 256 * 1024
+
+# --- self-integrity -------------------------------------------------------------
+# Read size for hashing bruhswer's own source files. Same reasoning as above: chunked
+# so no file is ever pulled into memory whole.
+HASH_CHUNK_BYTES = 128 * 1024
+
+# --- panic key ------------------------------------------------------------------
+# Ctrl+Shift+End. Registered globally so it works while the hosted browser has focus,
+# which is the only time it matters.
+#
+# Win32 modifier and virtual-key codes, named rather than inlined as bare hex.
+PANIC_MOD_ALT = 0x0001
+PANIC_MOD_CONTROL = 0x0002
+PANIC_MOD_SHIFT = 0x0004
+PANIC_MOD_NOREPEAT = 0x4000     # holding the keys must fire once, not repeatedly
+PANIC_VK_END = 0x23
+
+PANIC_HOTKEY_MODIFIERS = PANIC_MOD_CONTROL | PANIC_MOD_SHIFT | PANIC_MOD_NOREPEAT
+PANIC_HOTKEY_VK = PANIC_VK_END
+PANIC_HOTKEY_LABEL = "Ctrl+Shift+End"
+
+# Per-thread hotkey id. Only has to be unique within the registering thread, and the
+# listener thread registers exactly one.
+PANIC_HOTKEY_ID = 1
+
+# How long to wait for a terminated process to actually exit before giving up on
+# CONFIRMING it. TerminateProcess is asynchronous, so without this bruhswer would be
+# reporting a request as though it were an outcome.
+PANIC_EXIT_WAIT_MS = 2000
+
+# Bounded join for the hotkey listener thread on teardown.
+PANIC_JOIN_TIMEOUT_SECONDS = 2.0
 
 # --- network policy -------------------------------------------------------------
 # Firewall rule prefix. DELIBERATELY left as BRUHWSER while the product name is

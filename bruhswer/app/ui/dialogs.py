@@ -12,7 +12,22 @@ import tkinter as tk
 from .. import config
 
 
-def confirm_disposable_downloads(root: tk.Misc, pending: list) -> bool:
+def _accept(answer: dict, window: tk.Toplevel) -> None:
+    """Record the choice, then close. A named function rather than a lambda wrapping
+    a tuple of two calls: dict.__setitem__ and Widget.destroy both return None, so
+    using them as tuple elements to sequence side effects is opaque, and every
+    inspector flags a call-that-returns-nothing used as a value."""
+    answer["go"] = True
+    window.destroy()
+
+
+def _close_anyway(window: tk.Toplevel, then) -> None:
+    """Dismiss the warning, then run the caller's continuation. Same reasoning."""
+    window.destroy()
+    then()
+
+
+def confirm_disposable_downloads(root: tk.Tk, pending: list) -> bool:
     """Ask before destroying downloads. Returns False if the user cancels."""
     answer = {"go": False}
     win = tk.Toplevel(root)
@@ -45,14 +60,15 @@ def confirm_disposable_downloads(root: tk.Misc, pending: list) -> bool:
     tk.Button(row, text="Close and delete", bd=0, padx=16, pady=6,
               font=("Segoe UI", 10), bg=config.BG_RAISED, fg=config.BAD_RED,
               cursor="hand2",
-              command=lambda: (answer.__setitem__("go", True),
-                               win.destroy())).pack(side="left", padx=6)
+              command=lambda: _accept(answer, win)).pack(side="left", padx=6)
 
     root.wait_window(win)
     return answer["go"]
 
 
-def cleanup_incomplete(root: tk.Misc, message: str, on_close_anyway) -> None:
+# `tk.Tk`, not `tk.Misc`: these dialogs call transient(), which needs a real
+# window manager rather than any widget, and both callers pass the root.
+def cleanup_incomplete(root: tk.Tk, message: str, on_close_anyway) -> None:
     """Report a teardown that did not fully succeed. Never claim a clean exit (SS34)."""
     warn = tk.Toplevel(root)
     warn.title("bruhswer")
@@ -65,4 +81,5 @@ def cleanup_incomplete(root: tk.Misc, message: str, on_close_anyway) -> None:
              fg=config.BRAND_WHITE).pack(padx=20, pady=(0, 14))
     tk.Button(warn, text="Close anyway", bd=0, padx=16, pady=6,
               bg=config.BG_RAISED, fg=config.BRAND_WHITE, cursor="hand2",
-              command=lambda: (warn.destroy(), on_close_anyway())).pack(pady=(0, 18))
+              command=lambda: _close_anyway(warn, on_close_anyway)
+              ).pack(pady=(0, 18))
