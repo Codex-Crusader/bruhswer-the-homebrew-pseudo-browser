@@ -19,6 +19,7 @@ Report only. It changes nothing.
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 
@@ -231,6 +232,39 @@ def check_instance_attrs(tree: ast.AST, report: FileReport) -> None:
                 report.add(line, "attr-outside-init", f"{cls.name}.{name}")
 
 
+def _run_ruff() -> int | None:
+    """Run ruff if it is installed. Returns its exit code, or None if it is absent.
+
+    THIS IS HERE BECAUSE THE TWO LINTERS DISAGREED AND ONLY ONE GATED THE BUILD.
+
+    Ruff is configured in pyproject.toml and run in CI, but was installed nowhere
+    locally - so this file was the linter a developer ran, ruff was the linter that
+    decided whether the build passed, and they check different things. Two releases
+    went out with a red build over ruff findings that a local run would have shown in a
+    second.
+
+    Running it from here means one command gives the verdict CI gives. If ruff is not
+    installed the report SAYS SO rather than quietly reporting a clean tree, because
+    "no findings" and "nothing looked" must never render the same - the same rule the
+    application itself is built around.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "ruff", "check", str(_ROOT.parent)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300, shell=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    # `python -m ruff` exits 1 for findings and 1 for "No module named ruff" alike, so
+    # the two are told apart by what came back on stderr.
+    if "No module named" in (proc.stderr or ""):
+        return None
+    output = (proc.stdout or "").strip()
+    if output:
+        print(output)
+    return proc.returncode
+
+
 def main() -> int:
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else _ROOT
     targets = sorted(
@@ -255,7 +289,18 @@ def main() -> int:
     print(f"files scanned: {len(targets)}   findings: {total}")
     for kind, count in sorted(by_kind.items(), key=lambda kv: -kv[1]):
         print(f"  {count:>4}  {kind}")
-    return 0
+
+    print("\n" + "-" * 70)
+    ruff = _run_ruff()
+    if ruff is None:
+        # NOT reported as clean. An absent linter and a linter that found nothing are
+        # different facts, and this project does not let the second stand in for the
+        # first anywhere else either.
+        print("ruff: NOT INSTALLED - this report is INCOMPLETE, and CI runs ruff.")
+        print("      pip install -e .[dev]")
+        return 0
+    print("ruff:", "clean" if ruff == 0 else "FINDINGS (see above)")
+    return 1 if ruff != 0 else 0
 
 
 if __name__ == "__main__":

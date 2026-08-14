@@ -39,6 +39,19 @@ classifiers = [
 # appears, so this cannot drift silently.
 dependencies = []
 
+# DEVELOPMENT tooling only. Nothing here is imported by the application, nothing here
+# ships, and `dependencies` above stays empty - that is the claim the project makes and
+# CI fails the build if a requirements.txt appears.
+#
+# Ruff is declared because it GATES THE BUILD. It was configured in this file and run in
+# CI while being installed nowhere locally, so `tools/lint_report.py` was the linter a
+# developer actually ran and ruff was the linter that decided whether the build passed.
+# Two releases in a row went out red on ruff findings that a local run would have shown
+# in a second. Declaring it makes `pip install -e .[dev]` produce the same verdict CI
+# gives.
+[project.optional-dependencies]
+dev = ["ruff==0.15.5"]
+
 [project.urls]
 Homepage = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser"
 Documentation = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser/tree/main/docs"

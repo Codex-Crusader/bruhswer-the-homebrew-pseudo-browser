@@ -1,0 +1,33 @@
+# Line endings are pinned so that a checkout produces the same bytes everywhere.
+#
+# WHY THIS EXISTS. This repository was published with `core.autocrlf` set and no
+# `.gitattributes`, so git stored LF and checked CRLF out into the working tree
+# (`git ls-files --eol` reported `i/lf w/crlf`). That is normally invisible - until
+# 0.10.0 added a file manifest that hashes bruhswer's own source. A manifest generated
+# on one working copy recorded different bytes from the ones a fresh clone produces, so
+# every install would have reported the source as modified.
+#
+# The hasher in app/security/integrity.py now normalises line endings before hashing, so
+# the manifest no longer depends on this. This file fixes the underlying cause rather
+# than leaving the next tool that reads bytes off disk to rediscover it.
+#
+# `text=auto eol=lf`: git decides what is text, and every text file is checked out with
+# LF on every platform. bruhswer is Windows-only, and nothing it ships needs CRLF -
+# Python, PowerShell and the Inno Setup compiler all read LF without complaint.
+* text=auto eol=lf
+
+# Binary, never touched. Listing them is not optional: without it `text=auto` has to
+# guess, and a wrong guess on a PNG or an .exe corrupts the file.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.exe    binary
+*.dll    binary
+*.pdf    binary
+*.zip    binary
+
+# The file manifest is generated with LF endings by tools/hash_manifest.py and is
+# compared byte for byte, so it must never be translated.
+*.sha256 text eol=lf
