@@ -32,7 +32,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app import config
+from app import config  # noqa: E402
 from app.browser import tokens  # noqa: E402
 from app.network import network_guard  # noqa: E402
 from app.privacy import privacy_guard  # noqa: E402
@@ -153,7 +153,7 @@ class TestUnreadablePreferencesIsNeverGreen(unittest.TestCase):
              mock.patch.object(privacy_guard, "verify_applied",
                                lambda p, m: (2, 2, [])):
             checks = verifier._privacy_checks(Path("profile"), "standard")  # lint: allow protected-access - pins an internal branch that produced a false PASS
-        account = [c for c in checks if c.check_id == "privacy.account"][0]
+        account = next(c for c in checks if c.check_id == "privacy.account")
         self.assertIs(account.verdict, Verdict.PASS)
 
 

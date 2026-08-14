@@ -53,7 +53,7 @@ DECEPTIVE_CHARS = (
 )
 
 # Characters that must never appear in anything normalise() hands back.
-FORBIDDEN_IN_OUTPUT = tuple(chr(c) for c in range(0x20)) + ("\x7f",) + DECEPTIVE_CHARS
+FORBIDDEN_IN_OUTPUT = (*(chr(c) for c in range(0x20)), "\x7f", *DECEPTIVE_CHARS)
 
 # --- the corpus -----------------------------------------------------------------
 # Grouped by the reason each entry is here, so a failure says something.
@@ -112,7 +112,7 @@ def _with_every_deceptive_char() -> list[str]:
 
 def _with_every_control_char() -> list[str]:
     out: list[str] = []
-    for code in list(range(0x20)) + [0x7f]:
+    for code in [*range(0x20), 0x7f]:
         out.append(f"https://example.com/{chr(code)}x")
         out.append(f"exam{chr(code)}ple.com")
     return out
@@ -277,7 +277,7 @@ class TestNormaliseRefusals(unittest.TestCase):
                     urls.normalise(f"https://example.com/{ch}fdp.exe")
 
     def test_every_control_character_is_refused(self):
-        for code in list(range(0x20)) + [0x7f]:
+        for code in [*range(0x20), 0x7f]:
             with self.subTest(char=f"U+{code:04X}"):
                 with self.assertRaises(urls.RefusedURL):
                     urls.normalise(f"https://example.com/{chr(code)}x")
