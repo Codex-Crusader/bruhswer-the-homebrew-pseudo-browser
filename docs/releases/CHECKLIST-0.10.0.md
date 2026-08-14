@@ -20,8 +20,8 @@ from.** Where something was skipped, the reason is written next to it.
 [x] No suite reported SKIPPED                network policy applied, 0 skipped
 [x] Assertion count recorded here: 240       read from run output, not arithmetic
 [x] Real-world GUI walkthrough passes        37 OK, 0 problems
-[ ] CI green on the release commit           NOT YET - runs after push
-[ ] CodeQL green, no open alerts             NOT YET - runs after push
+[x] CI green on the release commit           after two lint fixes; see below
+[x] CodeQL green, no open alerts             green on every commit
 ```
 
 Per-suite counts, from the run:
@@ -120,6 +120,35 @@ release notes rather than implied to be covered.
 [ ] Demo recording                          NOT DONE - ROADMAP item 11, still open
 [x] Docs describe the CURRENT build; historical material is under docs/research/
 ```
+
+## What went wrong after tagging, and what was done about it
+
+The first tagged commit failed CI twice, on lint only. Recorded here rather than quietly
+fixed, because a checklist with tidy gaps is worse than no checklist.
+
+```
+745edd2  FAILED  repository hygiene: a test fixture used an absolute user path whose
+                 placeholder name is not one the check allows
+436a0b6  FAILED  ruff: RUF005 x3, E402, RUF015 in the new test files
+1b8f178  PASS    both causes fixed; tag v0.10.0 moved here
+```
+
+Neither failure touched a shipped file - both were in tests, which the installer does not
+ship. Verified with `git diff --name-only` over the shipped paths: **zero** shipped files
+differ between the originally tagged commit and the one the tag now points at. The
+published installer and its SHA-256 are therefore unchanged, and the asset was NOT
+replaced. (A rebuild produces a different hash, but only because Inno Setup embeds a
+compile timestamp; that is not evidence of a content change, and was not treated as one.)
+
+Root cause of the second failure, and why it was not caught before pushing: **ruff is
+configured in pyproject.toml and gates the build, but was installed nowhere on the release
+machine.** `tools/lint_report.py` was the linter actually run, and the two check different
+things. Fixed in 1b8f178 - ruff is now a declared dev extra, `lint_report.py` runs it, and
+reports its ABSENCE rather than printing a clean tree.
+
+`.gitattributes` was added in the same commit, pinning `* text=auto eol=lf`. It is not
+required for correctness - the manifest hasher already normalises line endings - but
+`core.autocrlf` with no `.gitattributes` is what created that hazard to begin with.
 
 ## Static analysis
 
