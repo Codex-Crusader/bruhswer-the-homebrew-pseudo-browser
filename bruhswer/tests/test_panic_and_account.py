@@ -210,8 +210,8 @@ class TestAttributedEnumeration(unittest.TestCase):
     def test_matching_is_case_insensitive_and_quote_insensitive(self):
         """subprocess quotes an argument only when it contains a space, so the same
         profile appears quoted on one machine and bare on another."""
-        bare = embed._normalise_cmdline(r'--user-data-dir=C:\Users\X\Profile')  # lint: allow protected-access - measures the real Win32 identity helpers
-        quoted = embed._normalise_cmdline(r'--user-data-dir="C:\Users\X\Profile"')  # lint: allow protected-access - measures the real Win32 identity helpers
+        bare = embed._normalise_cmdline(r'--user-data-dir=C:\Users\someone\Profile')  # lint: allow protected-access - measures the real Win32 identity helpers
+        quoted = embed._normalise_cmdline(r'--user-data-dir="C:\Users\someone\Profile"')  # lint: allow protected-access - measures the real Win32 identity helpers
         self.assertEqual(bare, quoted)
 
 
