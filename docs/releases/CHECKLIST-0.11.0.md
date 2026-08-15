@@ -132,7 +132,14 @@ them. Verified afterwards by cross-referencing every finding against every marke
                                                 excluded; no tests, no .venv, no
                                                 profiles, no logs
 [x] Installer and SHA256SUMS.txt published on the release
-[ ] Clean install tested                        NOT DONE - see below
+[x] Clean install tested                        tools\verify_install.py, 26/26
+[x] Launch from a clean working directory       installed copy produced its report
+[x] Install-time manifest check EXECUTED        OK 43 43, first time in any release
+[x] Uninstall tested                            silent uninstall, exit 0
+[x] Uninstall leaves nothing behind             install dir, registration, shortcut gone
+[x] Uninstall leaves user data alone            measured per folder, before vs after
+[ ] Launch from Start Menu / Desktop shortcut   NOT DONE - the shortcut is created and
+                                                removed, but nothing clicks it
 [ ] Launch from Start Menu / Desktop shortcut   NOT DONE
 [ ] Prerequisite refusals fire correctly        NOT DONE - needs a clean Windows image.
                                                 Unverified since 0.9.1.
@@ -163,11 +170,46 @@ SHA-256 is published beside it.
 868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2  bruhswer-0.11.0-setup.exe
 ```
 
-**Why the install boxes are not ticked, again.** `tools/verify_install.py` performs them
-automatically but refuses to run while bruhswer is already installed. It was not run for
-this release either. The install-time file-manifest check added in 0.10.0 has **still
-never executed against a built installer**, and this is the second release in a row that
-is true of.
+### The install boxes, and the data loss that ticking them caused
+
+`verify_install.py` was run for this release. It reports **26/26**, and the install-time
+file-manifest check added in 0.10.0 **executed against a built installer for the first
+time**: `OK 43 43`, no drift, no missing files, nothing unexpected.
+
+The first run destroyed a real 110 MB browsing profile, and the script reported that it
+had not.
+
+```
+[PASS] user data left alone, not silently deleted  -  C:\...\AppData\Local\BRUHWSER
+```
+
+That line printed while `profiles\`, `quarantine\` and `logs\` had just been deleted.
+Two defects, both now fixed:
+
+1. **The silent uninstall deleted browsing data without asking.** The uninstaller shows
+   a Yes/No prompt with `MB_DEFBUTTON2`, and the belief was that `/SUPPRESSMSGBOXES`
+   would therefore answer No. It does not: `/SUPPRESSMSGBOXES` answers a custom
+   `MB_YESNO` with **Yes**, and `MB_DEFBUTTON2` only sets which button a HUMAN sees
+   focused. `CurUninstallStepChanged` now returns early when `UninstallSilent` is true.
+   Silent means nobody was asked, and "nobody was asked" must not resolve to "yes,
+   delete it" for the one action here that cannot be undone.
+
+2. **The check could not fail.** It asserted `USER_DATA.exists()`, and the uninstaller
+   deliberately KEEPS `state\` so the Host Guard rollback record survives - so the root
+   directory always exists afterwards and the assertion was true no matter what had
+   been deleted. It now takes a per-folder census of file counts and bytes before the
+   install and compares it after the uninstall. `logs/` is asserted not to SHRINK
+   rather than to be identical, because step 5 runs the installed copy and bruhswer
+   logs what it did; asserting equality there would fail every run and get relaxed
+   into something meaningless.
+
+Re-verified after both fixes, with marker files planted in each folder: the markers
+survive the silent uninstall, and the run is 26/26. The rebuilt installer is the one
+published.
+
+**Still not ticked:** nothing clicks the Start Menu or Desktop shortcut. Their creation
+and removal is asserted; launching from them is not. Prerequisite refusals remain
+unverified and need a Windows image with no Python and no Edge.
 
 ## Repository
 

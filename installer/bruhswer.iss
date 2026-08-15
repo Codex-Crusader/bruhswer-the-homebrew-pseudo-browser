@@ -415,6 +415,23 @@ begin
   if not DirExists(DataDir) then
     exit;
 
+  { A SILENT UNINSTALL NEVER DELETES BROWSING DATA.
+
+    /SUPPRESSMSGBOXES answers this MsgBox with YES, and MB_DEFBUTTON2 does not change
+    that - it sets the default focused button for a HUMAN, not the suppressed reply.
+    So a silent uninstall destroyed a persistent profile and everything still in
+    quarantine, having asked nobody. It did exactly that during 0.11.0's install
+    verification, to a real 110 MB profile.
+
+    Silent means nobody was asked. "Nobody was asked" must not resolve to "yes, delete
+    it" for the one action here that cannot be undone. An interactive uninstall still
+    offers the choice, which is where a choice belongs. }
+  if UninstallSilent then
+  begin
+    Log('Silent uninstall: browsing data kept at ' + DataDir);
+    exit;
+  end;
+
   if MsgBox('bruhswer has been removed.'
             + #13#10#13#10
             + 'Its browsing data is still on this PC:'

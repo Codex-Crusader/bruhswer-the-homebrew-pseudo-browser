@@ -57,8 +57,29 @@ def uninstall_entries() -> list[str]:
     return found
 
 
+def _data_census() -> dict[str, tuple[int, int]]:
+    """subfolder -> (file count, total bytes) under the user's bruhswer data.
+
+    Taken before the install and again after the uninstall. Comparing the two is the
+    only way this script can tell "left alone" from "deleted"; see the note in step 8.
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for name in ("profiles", "quarantine", "logs", "state"):
+        folder = USER_DATA / name
+        if not folder.is_dir():
+            out[name] = (0, 0)
+            continue
+        files = [f for f in folder.rglob("*") if f.is_file()]
+        out[name] = (len(files), sum(f.stat().st_size for f in files))
+    return out
+
+
 def main(setup: Path) -> int:
     print(f"bruhswer install verification\n  artifact: {setup}\n")
+
+    # BEFORE anything runs. This script installs and then uninstalls, and the uninstall
+    # is the step that can destroy a real profile.
+    before = _data_census()
 
     print("1. Pre-install state")
     if APP.exists() or uninstall_entries():
@@ -147,8 +168,29 @@ def main(setup: Path) -> int:
     check("Start Menu shortcut removed", not START.exists())
 
     print("\n8. User data untouched")
-    check("user data left alone, not silently deleted", USER_DATA.exists(),
-          str(USER_DATA))
+    after = _data_census()
+    # PER-FOLDER, not `USER_DATA.exists()`. That is what this used to assert, and it
+    # cannot fail: the uninstaller deliberately KEEPS state\ so the Host Guard rollback
+    # record survives, so the root directory always exists afterwards. It printed
+    # "user data left alone, not silently deleted" during 0.11.0's verification run
+    # while a 110 MB persistent profile, the quarantine and the logs had just been
+    # deleted by the silent uninstall.
+    #
+    # A check that cannot fail is worse than no check: it is a green light nobody
+    # measured, which is the one defect class this project treats as a vulnerability.
+    for name in ("profiles", "quarantine", "state"):
+        was, now = before.get(name), after.get(name)
+        check(f"{name}/ unchanged by install and uninstall", was == now,
+              f"before={was} after={now}")
+
+    # logs/ is the one folder that legitimately GROWS: step 5 runs the installed copy
+    # with --check, and bruhswer logs what it did. So the assertion is that nothing was
+    # REMOVED, which is the property being defended, rather than exact equality - which
+    # would fail on every run and get relaxed to something meaningless.
+    was_logs, now_logs = before.get("logs", (0, 0)), after.get("logs", (0, 0))
+    check("logs/ not deleted (may grow; the installed app ran)",
+          now_logs[0] >= was_logs[0] and now_logs[1] >= was_logs[1],
+          f"before={was_logs} after={now_logs}")
 
     print("\n" + "=" * 66)
     failed = len(_results) - sum(_results)
