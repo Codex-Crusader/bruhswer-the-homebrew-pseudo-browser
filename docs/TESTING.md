@@ -1,6 +1,6 @@
 # Testing
 
-**240 assertions across 13 suites, 0 failures.**
+**308 assertions across 17 suites, 0 failures.**
 
 Counts are read from the run output, never carried forward from a previous release -
 this number has drifted before when it was retyped from memory.
@@ -29,12 +29,22 @@ More usefully: what the tests actually establish, and what they deliberately do 
 | Suite | Assertions | Needs | What it establishes |
 |---|---|---|---|
 | `test_security.py` | 52 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity |
+| `test_urls_fuzz.py` | 13 | nothing | Address-bar normalisation properties: what is accepted, what is refused, and that nothing becomes a flag |
+| `test_overclaim_regressions.py` | 18 | nothing | The three indicators that lied in 0.9.2, each pinned so it cannot come back |
+| `test_evidence_model.py` | 19 | nothing | Every check declares its evidence kind against a frozen table; every UNKNOWN carries a reason; probe statuses and reason codes stay in step |
+| `test_accessibility.py` | 16 | nothing | Verdicts are never carried by colour alone; the high-contrast and light palettes have their WCAG ratios **computed**, not asserted |
+| `test_window_surface.py` | 10 | nothing | The three-file split: every `self.X` resolves, no stub survives, the surface the UI suites drive is intact, neither mixin shadows the other |
+| `test_session_races.py` | 23 | nothing | Regression to recovery, close-session racing a live pass, panic at every lifecycle point, and no stale UI crossing a session boundary |
+| `test_reverification.py` | 17 | nothing | What counts as a control that stopped holding, and the worker's threading contract |
+| `test_disposable_overwrite.py` | 6 | nothing | The overwrite walker: what it covers, what it skips, and that skips are counted |
+| `test_integrity.py` | 16 | nothing | The file manifest: drift detection, and that an unreadable file is UNKNOWN rather than a pass |
+| `test_panic_and_account.py` | 17 | nothing | Process attribution by creation time, termination reporting, and the account-settings verb |
 | `test_persistent_profile.py` | 13 | firewall policy | Settings survive consecutive launches; the profile is kept and stays usable |
 | `test_end_to_end.py` | 10 | firewall policy | A real disposable session, real browser, real rules: router blocked, internet reachable, profile destroyed |
 | `test_network_regression.py` | 10 | firewall policy | Rule scope, and the browser's own token failing to alter its rules |
 | `test_localhost_surface.py` | 18 | firewall policy | The 19-path loopback matrix, and that bruhswer's claims match what was measured |
 | `test_user_path.py` | 19 | firewall policy | The full user journey including a **real download** landing in quarantine |
-| `test_browser_ui.py` | 30 | firewall policy | Window, hosting, **that the hosted window actually paints**, address bar, tabs, panels, session lifecycle |
+| `test_browser_ui.py` | 31 | firewall policy | Window, hosting, **that the hosted window actually paints**, address bar, tabs, panels, session lifecycle |
 
 ```powershell
 python tests\run_all.py            # everything, one verdict

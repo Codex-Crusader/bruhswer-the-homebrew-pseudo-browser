@@ -42,7 +42,8 @@ def _creation_of(pid: int) -> int | None:
     if not handle:
         return None
     try:
-        return embed._creation_filetime(handle)  # lint: allow protected-access - measures the real Win32 identity helpers
+        # protected-access: measures the real Win32 identity helpers
+        return embed._creation_filetime(handle)  # lint: allow protected-access
     finally:
         embed.KERNEL32.CloseHandle(ctypes.wintypes.HANDLE(handle))
 
@@ -210,8 +211,11 @@ class TestAttributedEnumeration(unittest.TestCase):
     def test_matching_is_case_insensitive_and_quote_insensitive(self):
         """subprocess quotes an argument only when it contains a space, so the same
         profile appears quoted on one machine and bare on another."""
-        bare = embed._normalise_cmdline(r'--user-data-dir=C:\Users\someone\Profile')  # lint: allow protected-access - measures the real Win32 identity helpers
-        quoted = embed._normalise_cmdline(r'--user-data-dir="C:\Users\someone\Profile"')  # lint: allow protected-access - measures the real Win32 identity helpers
+        # protected-access: measures the real Win32 identity helpers.
+        bare = embed._normalise_cmdline(  # lint: allow protected-access
+            r'--user-data-dir=C:\Users\someone\Profile')
+        quoted = embed._normalise_cmdline(  # lint: allow protected-access
+            r'--user-data-dir="C:\Users\someone\Profile"')
         self.assertEqual(bare, quoted)
 
 
@@ -293,9 +297,12 @@ class TestAccountSettingsTarget(unittest.TestCase):
 
     def test_the_allowlist_holds_exactly_two_entries(self):
         """A growing allowlist is how this becomes a general internal-URL channel."""
-        self.assertEqual(len(edge._ALLOWED_NON_HTTP), 2)  # lint: allow protected-access - measures the real Win32 identity helpers
-        self.assertIn(edge.BLANK, edge._ALLOWED_NON_HTTP)  # lint: allow protected-access - measures the real Win32 identity helpers
-        self.assertIn(edge.PROFILES_SETTINGS, edge._ALLOWED_NON_HTTP)  # lint: allow protected-access - measures the real Win32 identity helpers
+        # protected-access: measures the real Win32 identity helpers
+        self.assertEqual(len(edge._ALLOWED_NON_HTTP), 2)  # lint: allow protected-access
+        # protected-access: measures the real Win32 identity helpers
+        self.assertIn(edge.BLANK, edge._ALLOWED_NON_HTTP)  # lint: allow protected-access
+        self.assertIn(edge.PROFILES_SETTINGS,
+                      edge._ALLOWED_NON_HTTP)  # lint: allow protected-access
 
 
 if __name__ == "__main__":

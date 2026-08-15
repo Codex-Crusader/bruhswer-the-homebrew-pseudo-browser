@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
@@ -36,6 +37,50 @@ class LaunchOutcome:
     message: str
     result: verifier.VerificationResult
     session: session_manager.Session | None = None
+
+
+@dataclass(frozen=True)
+class SessionSnapshot:
+    """An immutable view of the session, for the UI.
+
+    BrowserWindow used to read `controller.session` directly and then dereference it
+    again a line or two later. Between those reads the panic hotkey, a teardown or a
+    failed launch can set it to None, so `if self.controller.session else` guards were
+    load-bearing in six places and each one was a chance to get it wrong.
+
+    Cheap and subprocess-free on purpose: liveness costs a ~258ms PowerShell round trip,
+    so callers that need it ask `Controller.is_running()` themselves.
+    """
+
+    active: bool
+    mode: str
+    session_id: str
+    profile_dir: Path
+    is_disposable: bool
+    generation: int
+    elapsed_seconds: float
+
+    @property
+    def badge(self) -> str:
+        if not self.active:
+            return "NO SESSION"
+        return "DISPOSABLE BRUH" if self.is_disposable else "PERSISTENT BRUH"
+
+    def elapsed_text(self) -> str:
+        """How long this session has been open, as m:ss or h:mm:ss."""
+        if not self.active:
+            return ""
+        total = int(self.elapsed_seconds)
+        hours, rest = divmod(total, 3600)
+        minutes, seconds = divmod(rest, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
+
+
+NO_SESSION = SessionSnapshot(
+    active=False, mode="", session_id="", profile_dir=config.PROFILE_PERSISTENT,
+    is_disposable=False, generation=0, elapsed_seconds=0.0)
 
 
 @dataclass(frozen=True)
@@ -64,6 +109,8 @@ class VerificationRequest:
     download_dir: Path | None
     session_id: str | None
     generation: int
+    # `generation` cannot order two passes within ONE session; this can.
+    verification_id: int = 0
 
 
 def run_verification(request: VerificationRequest) -> verifier.VerificationResult:
@@ -97,10 +144,25 @@ class Controller:
         # generation describes a session that is gone and is discarded rather than
         # shown - see VerificationRequest.
         self._generation = 0
+        self._verification_seq = 0
 
     @property
     def generation(self) -> int:
         return self._generation
+
+    def snapshot(self) -> SessionSnapshot:
+        """A coherent, immutable view of the session. Never touches a subprocess."""
+        session = self.session
+        if session is None:
+            return SessionSnapshot(
+                active=False, mode="", session_id="",
+                profile_dir=config.PROFILE_PERSISTENT, is_disposable=False,
+                generation=self._generation, elapsed_seconds=0.0)
+        elapsed = (datetime.now(timezone.utc) - session.created).total_seconds()
+        return SessionSnapshot(
+            active=True, mode=session.mode, session_id=session.session_id,
+            profile_dir=session.profile_dir, is_disposable=session.is_disposable,
+            generation=self._generation, elapsed_seconds=max(0.0, elapsed))
 
     # --- STATUS / VERIFY --------------------------------------------------------
 
@@ -116,6 +178,7 @@ class Controller:
         argv = self._build_argv(profile) if self.edge_path else []
         download_dir = (quarantine.quarantine_dir_for(self.session.session_id)
                         if self.session is not None else None)
+        self._verification_seq += 1
         return VerificationRequest(
             profile_dir=profile,
             argv=tuple(argv),
@@ -123,12 +186,14 @@ class Controller:
             edge_path=self.edge_path,
             download_dir=download_dir,
             session_id=None if self.session is None else self.session.session_id,
-            generation=self._generation)
+            generation=self._generation,
+            verification_id=self._verification_seq)
 
-    def verify(self, mode: str = session_manager.PERSISTENT) -> verifier.VerificationResult:
+    def verify(self, mode: str = session_manager.PERSISTENT
+               ) -> verifier.VerificationResult:
         """Run every check without launching anything.
 
-        BLOCKING, and it starts 15 helper processes. Kept for the synchronous callers
+        BLOCKING, and it starts 14 helper processes. Kept for the synchronous callers
         (startup, the BRUH panel, the tests). Anything on a timer must go through
         verification_request() + run_verification() on a worker instead.
         """
@@ -158,6 +223,13 @@ class Controller:
             return None
         return embed.find_browser_window(
             embed.edge_pids_for_profile(self.session.profile_dir))
+
+    def pending_disposable_downloads(self) -> list:
+        """Quarantined files a disposable session would destroy. Empty otherwise."""
+        session = self.session
+        if session is None or not session.is_disposable:
+            return []
+        return session_manager.pending_quarantine(session)
 
     def set_hosted_window(self, hwnd: int | None) -> None:
         """Told by the UI which window it hosted, so titles can be read back."""
@@ -221,6 +293,10 @@ class Controller:
     def stop(self) -> tuple[bool, str]:
         messages: list[str] = []
 
+        # Before any teardown: _stop_profile_processes can wait 12s, and a pass
+        # completing in that window would still carry a matching generation.
+        self._generation += 1
+
         # Ask the window to close first, the way a user would. Killing the process
         # leaves the profile flagged as crashed, which makes the NEXT launch offer to
         # restore the previous session's tabs - bad for a browser built around
@@ -243,7 +319,6 @@ class Controller:
             self._stop_profile_processes(self.session.profile_dir)
 
         session, self.session = self.session, None
-        self._generation += 1
         if session is None:
             return True, "No session was open."
 
@@ -286,6 +361,8 @@ class Controller:
         if session is None:
             return False, "No session was open."
 
+        self._generation += 1
+
         processes = embed.attributed_edge_processes(session.profile_dir)
         if processes is None:
             # Could not enumerate. Saying "nothing was running" here would be a claim
@@ -304,7 +381,6 @@ class Controller:
         self._process = None
         self._hosted_hwnd = None
         self.session = None
-        self._generation += 1
 
         parts = [f"PANIC: {report.terminated} browser process(es) terminated"]
         if report.confirmed_exited < report.terminated:
@@ -445,7 +521,8 @@ class Controller:
         _time.sleep(2.0)
         remaining = embed.edge_pids_for_profile(profile_dir)
         if remaining:
-            _log.warning("%d browser process(es) still running after stop", len(remaining))
+            _log.warning("%d browser process(es) still running after stop",
+                         len(remaining))
         return len(remaining)
 
     def _profile_for_preview(self, mode: str) -> Path:

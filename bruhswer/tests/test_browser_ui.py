@@ -173,8 +173,9 @@ def main() -> int:
     print("bruhswer browser UI - real user workflow")
     print("=" * 74)
 
-    if len(sysquery.bruhswer_rules()) < 2:
-        print("Network policy is not applied. Run tools\\bruhswer-netpolicy.ps1 -Action apply")
+    if len(sysquery.bruhswer_rules().value) < 2:
+        print("Network policy is not applied. "
+              "Run tools\\bruhswer-netpolicy.ps1 -Action apply")
         return 1
 
     # --- URL handling is pure logic; check it before opening anything ------------

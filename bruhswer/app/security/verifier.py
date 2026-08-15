@@ -10,7 +10,8 @@ that was never verified is the exact defect this project treats as a vulnerabili
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +21,8 @@ from ..host import host_guard
 from ..logging_setup import get_logger
 from ..network import network_guard
 from ..privacy import privacy_guard
-from ..verdict import Check, Verdict, worst
+from ..verdict import (Check, EvidenceKind, UnknownReason, Verdict,
+                       reason_for_probe, worst)
 from . import browser_guard, integrity
 
 _log = get_logger("verifier")
@@ -30,9 +32,23 @@ _log = get_logger("verifier")
 NO_RENDERERS: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class GuardTiming:
+    """How long one guard took, and how many checks it produced.
+
+    Collected into the result object rather than a module-level list, so it needs no
+    locking - the UI thread and the verify worker each build their own.
+    """
+
+    name: str
+    duration_ms: float
+    checks: int
+
+
 @dataclass
 class VerificationResult:
     checks: list[Check] = field(default_factory=list)
+    timings: list[GuardTiming] = field(default_factory=list)
 
     @property
     def blockers(self) -> list[Check]:
@@ -48,6 +64,13 @@ class VerificationResult:
     def category(self, prefix: str) -> Verdict:
         subset = self.by_prefix(prefix)
         return worst(subset) if subset else Verdict.UNKNOWN
+
+    @property
+    def total_ms(self) -> float:
+        return sum(t.duration_ms for t in self.timings)
+
+    def slowest(self, limit: int = 3) -> list[GuardTiming]:
+        return sorted(self.timings, key=lambda t: t.duration_ms, reverse=True)[:limit]
 
 
 def verify_all(profile_dir: Path, argv: list[str], mode: str,
@@ -67,39 +90,73 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
     """
     result = VerificationResult()
 
-    result.checks.extend(edge.verify_runtime(edge_path))
+    def run(name: str, guard: Callable[[], list[Check]]) -> None:
+        """Run one guard, record what it cost, and never let it take the pass down.
+
+        A guard that raised used to abort the whole pass, costing the user every OTHER
+        light including the critical ones. A crash now costs exactly its own checks and
+        surfaces as an UNKNOWN naming the guard.
+        """
+        started = time.perf_counter()
+        try:
+            produced = guard()
+        except Exception as exc:                    # noqa: BLE001  # lint: allow broad-except - one guard must not take down the pass
+            _log.exception("guard %s raised; the rest of the pass continues", name)
+            produced = [Check(
+                f"{name}.guard", f"{name} checks ran", Verdict.UNKNOWN, critical=False,
+                detail=(f"bruhswer's {name} checks could not run, so nothing they "
+                        f"cover was established this pass."),
+                evidence=f"{exc.__class__.__name__}",
+                evidence_kind=EvidenceKind.INFERENCE,
+                unknown_reason=UnknownReason.PROBE_ERROR)]
+        elapsed = (time.perf_counter() - started) * 1000.0
+        result.checks.extend(produced)
+        result.timings.append(GuardTiming(name, elapsed, len(produced)))
+
+    run("edge", lambda: edge.verify_runtime(edge_path))
     if edge_path is not None:
-        result.checks.extend(browser_guard.verify(profile_dir, argv))
+        run("browser", lambda: browser_guard.verify(profile_dir, argv))
         # Measured, not assumed: what the renderer tokens actually are on THIS machine.
         #
         # Passed straight through, NOT as `renderer_pids or []`. That idiom collapsed
         # None ("could not ask Windows") into [] ("asked, and there are none"), which
         # is the distinction embed.renderer_pids_for_profile exists to preserve.
-        result.checks.extend(
-            browser_guard.verify_renderer_sandbox(renderer_pids))
-        result.checks.extend(network_guard.verify(edge_path))
-    result.checks.extend(host_guard.evaluate())
-    result.checks.extend(_controller_checks())
-    result.checks.extend(integrity.verify())
-    result.checks.extend(_privacy_checks(profile_dir, mode))
+        run("sandbox", lambda: browser_guard.verify_renderer_sandbox(renderer_pids))
+        run("network", lambda: network_guard.verify(edge_path))
+    run("host", host_guard.evaluate)
+    run("controller", _controller_checks)
+    run("integrity", integrity.verify)
+    run("privacy", lambda: _privacy_checks(profile_dir, mode))
     if download_dir is not None:
-        result.checks.extend(_download_checks(profile_dir, download_dir))
-    result.checks.extend(_dns_checks())
+        run("downloads", lambda: _download_checks(profile_dir, download_dir))
+    run("dns", _dns_checks)
 
     verdicts: dict[str, int] = {}
     for check in result.checks:
         verdicts[str(check.verdict)] = verdicts.get(str(check.verdict), 0) + 1
-    _log.info("verification complete: %s blockers=%d", verdicts, len(result.blockers))
+    _log.info("verification complete: %s blockers=%d in %.0fms (slowest: %s)",
+              verdicts, len(result.blockers), result.total_ms,
+              ", ".join(f"{t.name}={t.duration_ms:.0f}ms" for t in result.slowest()))
     return result
 
 
 def _controller_checks() -> list[Check]:
-    elevated = sysquery.is_elevated()
-    if elevated is None:
+    """bruhswer's own privilege level. LIVE - it reads THIS process's token.
+
+    critical=True, so UNKNOWN blocks launch - which is why sysquery only ever memoises
+    a definite True/False.
+    """
+    probe = sysquery.is_elevated_probe()
+    if probe.value is None:
         return [Check("controller.privilege", "bruhswer runs unelevated",
                       Verdict.UNKNOWN, critical=True,
-                      detail="Could not determine bruhswer's privilege level.",
-                      evidence="is_elevated=None")]
+                      detail=("bruhswer could not determine its own privilege level, "
+                              "so it cannot confirm it is running as a normal user. "
+                              "Launch is blocked rather than assumed safe."),
+                      evidence=probe.reason(),
+                      evidence_kind=EvidenceKind.LIVE,
+                      unknown_reason=reason_for_probe(probe.status))]
+    elevated = probe.value
     return [Check(
         "controller.privilege", "bruhswer runs unelevated",
         Verdict.PASS if not elevated else Verdict.FAIL, critical=True,
@@ -107,23 +164,31 @@ def _controller_checks() -> list[Check]:
                 if not elevated else
                 "bruhswer is running as Administrator. Close it and start it normally "
                 "- an elevated browser is a worse outcome, not a better one."),
-        evidence=f"elevated={elevated}")]
+        evidence=f"elevated={elevated} {probe.reason()}",
+        evidence_kind=EvidenceKind.LIVE)]
 
 
 def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
     applied, expected, missing = privacy_guard.verify_applied(profile_dir, mode)
     if expected == 0:
         return []
+    reason = UnknownReason.NONE
     if missing == [privacy_guard.NO_PROFILE_YET]:
         verdict, detail = (Verdict.UNKNOWN,
                            f"No bruhswer session has run yet, so there is no profile to "
                            f"check. All {expected} settings are written and re-verified "
                            f"when a session starts.")
+        reason = UnknownReason.NO_PROFILE_YET
     elif applied == expected:
-        verdict, detail = Verdict.PASS, f"All {expected} privacy settings are in place."
+        verdict, detail = (Verdict.PASS,
+                           f"All {expected} privacy settings are present in the "
+                           f"profile as bruhswer wrote them. This is what the profile "
+                           f"file says; bruhswer has not observed the browser acting "
+                           f"on each setting.")
     elif applied == 0:
         verdict, detail = (Verdict.UNKNOWN,
                            "Privacy settings could not be read back from the profile.")
+        reason = UnknownReason.UNREADABLE
     else:
         verdict, detail = (Verdict.FAIL,
                            f"{applied} of {expected} settings applied. "
@@ -131,7 +196,9 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
                            + (" ..." if len(missing) > 4 else ""))
     checks = [Check("privacy.settings", "Privacy settings applied", verdict,
                     critical=False, detail=detail,
-                    evidence=f"applied={applied}/{expected} missing={missing[:10]}")]
+                    evidence=f"applied={applied}/{expected} missing={missing[:10]}",
+                    evidence_kind=EvidenceKind.READ_BACK,
+                    unknown_reason=reason)]
 
     # Measured, not assumed. See privacy_guard.verify_account_signin for why this
     # check exists at all. Reported as NOT ENFORCEABLE rather than FAIL, because
@@ -143,7 +210,8 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
             "privacy.account", "Browser account sign-in", Verdict.UNKNOWN,
             critical=False,
             detail="No session has run yet, so there is no profile to read.",
-            evidence=sign_detail))
+            evidence=sign_detail, evidence_kind=EvidenceKind.READ_BACK,
+            unknown_reason=UnknownReason.NO_PROFILE_YET))
     elif sign_detail == privacy_guard.PREFS_UNREADABLE:
         # "Could not read the file" is NOT "no account is signed in". This branch used
         # to fall through to the else below and render as a green PASS asserting that
@@ -155,7 +223,8 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
             detail=("The profile's Preferences file could not be read, so bruhswer "
                     "cannot tell whether Edge has signed this session into a Microsoft "
                     "account. Treat this session as NOT anonymous until it can."),
-            evidence=sign_detail))
+            evidence=sign_detail, evidence_kind=EvidenceKind.READ_BACK,
+            unknown_reason=UnknownReason.UNREADABLE))
     elif signed_in:
         checks.append(Check(
             "privacy.account", "Browser account sign-in", Verdict.FAIL,
@@ -166,13 +235,13 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
                     "cannot stop this: only machine-wide Edge policy can, and it will "
                     "not change every Edge profile on your PC. Sign out inside the "
                     "session, in Settings > Profiles."),
-            evidence=sign_detail))
+            evidence=sign_detail, evidence_kind=EvidenceKind.READ_BACK))
     else:
         checks.append(Check(
             "privacy.account", "Browser account sign-in", Verdict.PASS,
             critical=False,
-            detail="No Microsoft account is signed into this profile.",
-            evidence=sign_detail))
+            detail="No Microsoft account is recorded in this profile.",
+            evidence=sign_detail, evidence_kind=EvidenceKind.READ_BACK))
     return checks
 
 
@@ -183,20 +252,33 @@ def _download_checks(profile_dir: Path, download_dir: Path) -> list[Check]:
     caught it. The check is critical because a silently-wrong download path turns the
     quarantine feature into a false claim, and a false security claim is the one defect
     class this project treats as a vulnerability in its own right.
+
+    TITLE WORDING IS DELIBERATE, for the same reason as integrity._TITLE. It was
+    "Downloads go to quarantine" - a statement about what will happen to a file, made
+    on the strength of reading two keys out of JSON. The narrower title is what the
+    evidence supports, and it still catches the defect this check was written for
+    (Edge ignoring --download-directory), which showed up as the preference being absent.
     """
     ok, detail = privacy_guard.verify_download_directory(profile_dir, download_dir)
     if not ok and detail == "no profile yet":
-        return [Check("downloads.quarantine", "Downloads go to quarantine",
+        return [Check("downloads.quarantine", _DOWNLOAD_TITLE,
                       Verdict.UNKNOWN, critical=False,
                       detail="No session has run yet; set and verified at launch.",
-                      evidence=detail)]
+                      evidence=detail, evidence_kind=EvidenceKind.READ_BACK,
+                      unknown_reason=UnknownReason.NO_PROFILE_YET)]
     return [Check(
-        "downloads.quarantine", "Downloads go to quarantine",
+        "downloads.quarantine", _DOWNLOAD_TITLE,
         Verdict.PASS if ok else Verdict.FAIL, critical=True,
-        detail=("Downloads are directed to bruhswer's quarantine folder, and the "
-                "browser will not ask where to save."
+        detail=("The profile's download preferences point at bruhswer's quarantine "
+                "folder and have 'ask where to save' turned off. Read back from the "
+                "profile just now; bruhswer has not downloaded a file during this "
+                "check to watch where it lands."
                 if ok else f"Downloads would NOT be quarantined: {detail}"),
-        evidence=f"expected={download_dir} ok={ok} detail={detail}")]
+        evidence=f"expected={download_dir} ok={ok} detail={detail}",
+        evidence_kind=EvidenceKind.READ_BACK)]
+
+
+_DOWNLOAD_TITLE = "Download folder is set to quarantine"
 
 
 def _dns_checks() -> list[Check]:
@@ -208,10 +290,22 @@ def _dns_checks() -> list[Check]:
     install. Brief SS24 is explicit that those measurements must not be reused and that
     fabricated certainty is not acceptable.
     """
-    doh = sysquery.doh_servers()
+    doh_probe = sysquery.doh_servers()
+    servers_probe = sysquery.dns_servers()
+
+    if not doh_probe.ok and not servers_probe.ok:
+        return [Check(
+            "dns.encrypted", "DNS is encrypted", Verdict.UNKNOWN, critical=False,
+            detail=("bruhswer could not read this PC's DNS configuration, so it cannot "
+                    "even describe which resolvers are in use - let alone whether "
+                    "queries leave encrypted."),
+            evidence=f"doh={doh_probe.reason()} servers={servers_probe.reason()}",
+            evidence_kind=EvidenceKind.READ_BACK,
+            unknown_reason=reason_for_probe(doh_probe.status))]
+
+    doh = doh_probe.value
     auto = [d for d in doh if str(d.get("AutoUpgrade")).lower() in ("true", "1")]
-    servers = sysquery.dns_servers()
-    configured = sorted({s for entry in servers
+    configured = sorted({s for entry in servers_probe.value
                          for s in (entry.get("ServerAddresses") or [])})
     templated = {str(d.get("ServerAddress")) for d in doh}
     without = [s for s in configured if s not in templated]
@@ -226,4 +320,8 @@ def _dns_checks() -> list[Check]:
     return [Check("dns.encrypted", "DNS is encrypted", Verdict.UNKNOWN,
                   critical=False, detail=detail,
                   evidence=f"templates={len(doh)} auto={len(auto)} "
-                           f"configured={configured} untemplated={without}")]
+                           f"configured={configured} untemplated={without} "
+                           f"{doh_probe.reason()}",
+                  evidence_kind=EvidenceKind.READ_BACK,
+                  # The config read fine; what the browser SENDS is the permanent gap.
+                  unknown_reason=UnknownReason.NEVER_MEASURED)]

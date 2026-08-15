@@ -11,7 +11,7 @@
 
 [project]
 name = "bruhswer"
-version = "0.10.0"
+version = "0.11.0"
 description = "A measured, fail-closed security wrapper around Microsoft Edge on Windows."
 requires-python = ">=3.11"
 authors = [{ name = "Bhargavaram Krishnapur" }]
@@ -50,7 +50,10 @@ dependencies = []
 # in a second. Declaring it makes `pip install -e .[dev]` produce the same verdict CI
 # gives.
 [project.optional-dependencies]
-dev = ["ruff==0.15.5"]
+# PINNED TO THE VERSION CI INSTALLS. It read 0.15.5 while .github/workflows/ci.yml
+# installed 0.16.2, so `pip install -e .[dev]` gave a developer a different linter from
+# the one gating the build - the same split this comment block was written to close.
+dev = ["ruff==0.16.2"]
 
 [project.urls]
 Homepage = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-browser"
@@ -65,6 +68,16 @@ Security = "https://github.com/Codex-Crusader/bruhswer-the-homebrew-pseudo-brows
 [tool.ruff]
 line-length = 90
 target-version = "py311"
+# E501 IS GATED, and is no longer in the ignore list below. It used to be, on the
+# grounds that "line length is handled by the formatter" - but no formatter runs in this
+# project, so nothing handled it and 71 lines had drifted past 90 columns while ruff
+# reported the tree clean.
+#
+# E1/E2/E3 (indentation, whitespace, blank lines) are still PREVIEW-ONLY in ruff, so
+# they are not gated here: turning preview on globally pulls in a pile of unrelated
+# preview rules. Check them with
+#     ruff check --preview --select E1,E2,E3,W1,W2,W3 .
+# which is clean as of this commit.
 extend-exclude = [".venv", "tools/stage2", "tools/stage4", "tools/stage25"]
 
 [tool.ruff.lint]
@@ -85,7 +98,6 @@ ignore = [
               # and test_security.py enforces both with AST checks
     "S607",   # partial executable path - bruhswer uses absolute paths from
               # config; this fires on test helpers only
-    "E501",   # line length is handled by the formatter, not the linter
     "S105",   # "hardcoded password". Fires on `PASS = "PASS"` in the Verdict enum,
               # which is the project's core vocabulary, not a credential
     "RUF100", # "unused noqa". The E402 markers guard imports that follow a

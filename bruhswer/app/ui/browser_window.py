@@ -23,7 +23,6 @@ HONESTY RULES BAKED INTO THIS FILE
 
 from __future__ import annotations
 
-import queue
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
@@ -32,12 +31,11 @@ from .. import config
 from ..browser import embed
 from ..controller import controller as ctrl
 from ..downloads import quarantine
-from ..privacy import privacy_guard
 from ..security import verifier
 from ..sessions import session_manager
-from ..verdict import Verdict
-from . import dialogs
-from . import panic_key, verify_worker
+from . import panic_key
+from .session_lifecycle import SessionLifecycleMixin
+from .verification_ui import VerificationUIMixin
 from .verify_worker import VerifyWorker
 from .panels import (
     chrome,
@@ -52,7 +50,7 @@ _COLOUR = chrome.COLOUR
 _WORD = chrome.WORD
 
 
-class BrowserWindow:
+class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
     def __init__(self) -> None:
         self.controller = ctrl.Controller()
         # ANNOTATED, not just assigned. A bare `= None` makes every static checker
@@ -66,7 +64,7 @@ class BrowserWindow:
         self._watch_job: str | None = None
         self._placeholder = True
 
-        # Runtime re-verification. The worker does the 15 helper processes on its own
+        # Runtime re-verification. The worker does the 14 helper processes on its own
         # thread; this window only ever drains its queue. See ui/verify_worker.py for
         # why none of that may happen on the Tk thread.
         self._verifier = VerifyWorker()
@@ -75,6 +73,7 @@ class BrowserWindow:
         # check_ids currently named in a regression warning, so the warning can be
         # withdrawn once every one of them verifies again.
         self._warned_ids: set[str] = set()
+        self._applied_verification_id = 0
 
         # Global panic hotkey. Owns its own listener thread; see ui/panic_key.py for
         # why a Tk-level binding cannot do this job.
@@ -99,8 +98,23 @@ class BrowserWindow:
         self.status_text: tk.Label
         self.account_banner: tk.Frame
         self.account_banner_text: tk.Label
+        self.regression_banner: tk.Frame
+        self.regression_text: tk.Label
         self.panic_hint: tk.Label
         self.lights: dict[str, tk.Label] = {}
+        # The word beside each dot, so a count can be appended to it.
+        self.light_labels: dict[str, tk.Label] = {}
+
+        # BEFORE _build(), because every widget reads its colours from config once, at
+        # construction. bruhswer's palette is a fixed dark theme whose amber and green
+        # do not clear WCAG AA on black; under high contrast that makes the status
+        # lights - the whole product - hard to read for the user who most needs them.
+        # High contrast wins: it is an accessibility requirement, not a preference.
+        self.high_contrast = embed.high_contrast()
+        if self.high_contrast:
+            config.apply_high_contrast()
+        elif embed.prefers_dark() is False:
+            config.apply_light()
 
         self.root = tk.Tk()
         self.root.title(f"{config.MOAI} {config.APP_NAME}")
@@ -243,6 +257,20 @@ class BrowserWindow:
                       activebackground=config.BG_RAISED,
                       command=cmd).pack(side="left", padx=(0, 8), pady=8)
 
+        # Regression banner. Stays up for as long as a control that verified at launch
+        # still does not, INCLUDING after the user dismisses the curtain with "Keep
+        # browsing" - which used to erase every trace of the warning and leave them
+        # browsing a degraded session with a clean-looking window.
+        self.regression_banner = tk.Frame(self.root, bg=config.BAD_RED)
+        self.regression_text = tk.Label(
+            self.regression_banner, text="", font=("Segoe UI", 10, "bold"), anchor="w",
+            justify="left", wraplength=820, bg=config.BAD_RED, fg="#FFFFFF")
+        self.regression_text.pack(side="left", padx=(12, 8), pady=8)
+        tk.Button(self.regression_banner, text="What changed",
+                  font=("Segoe UI", 9), bd=0, padx=12, pady=4,
+                  bg=config.BG_PANEL, fg=config.BRAND_WHITE, cursor="hand2",
+                  command=self.open_security_panel).pack(side="right", padx=12, pady=8)
+
         # Account banner. Packed only when a live measurement says an account is
         # attached; see _refresh_account_banner for why this is state-driven and not
         # wired to the regression path.
@@ -282,12 +310,14 @@ class BrowserWindow:
                     "PANIC"):
             cell = tk.Frame(status, bg=config.BG_PANEL)
             cell.pack(side="left", padx=(12, 4), pady=7)
-            dot = tk.Label(cell, text="●", font=("Segoe UI", 10),
+            dot = tk.Label(cell, text=config.SHAPE_UNKNOWN, font=("Segoe UI", 10),
                            bg=config.BG_PANEL, fg=config.OFF_GREY)
             dot.pack(side="left", padx=(0, 5))
-            tk.Label(cell, text=key, font=("Consolas", 9), bg=config.BG_PANEL,
-                     fg=config.BRAND_WHITE).pack(side="left")
+            name = tk.Label(cell, text=key, font=("Consolas", 9), bg=config.BG_PANEL,
+                            fg=config.BRAND_WHITE)
+            name.pack(side="left")
             self.lights[key] = dot
+            self.light_labels[key] = name
 
         # The panic key's state is PERMANENT chrome, not a status message. It must
         # still be readable at the moment the user reaches for it, which is long after
@@ -304,136 +334,6 @@ class BrowserWindow:
         if self._placeholder:
             self.address.delete(0, "end")
             self._placeholder = False
-
-    # ----------------------------------------------------------------- startup
-
-    def startup(self) -> None:
-        """Verify first. The browser only appears if the checks allow it (SS9)."""
-        # Armed BEFORE verification, so a blocked launch - the state where an escape
-        # hatch matters most - still shows the panic key's true state.
-        self._arm_panic_key()
-        self.set_status("Running security verification...")
-        self.result = self.controller.verify(session_manager.PERSISTENT)
-        self.refresh_lights()
-
-        if self.result.blockers:
-            reasons = "\n".join(f"  • {c.title}" for c in self.result.blockers)
-            self._show_curtain(
-                f"BRUH. NO.\n\nRequired security controls could not be verified.\n"
-                f"Browser launch has been blocked.\n\n{reasons}",
-                config.BAD_RED,
-                [("What failed", self.open_security_panel),
-                 ("Check again", self.startup)])
-            self.set_status("Launch blocked")
-            return
-
-        self.open_session(session_manager.PERSISTENT)
-
-    def open_session(self, mode: str) -> None:
-        embed.detach_input()
-
-        # Starting a new session stops the current one, which destroys a disposable
-        # session's downloads. Same warning as an explicit close - the destruction is
-        # identical, so hiding it here would just move the surprise. Detach first,
-        # re-attach if they back out.
-        if not self._confirm_disposable_downloads():
-            self._reattach_input()
-            self.set_status("Kept the current session; no new session started.")
-            return
-
-        # Unconditionally, not "if is_running()". After the browser window closed on
-        # its own, is_running() is False while a disposable session's profile and
-        # quarantine are still on disk - so the old guard skipped the teardown the user
-        # had just confirmed. stop() early-returns on a None session, so this is safe.
-        _stopped, message = self.controller.stop()
-        if message:
-            self.set_status(message)
-        self.hosted_hwnd = None
-        self._host_attempts = 0
-
-        self._show_curtain(f"Starting {mode} session...", config.FG_DIM)
-        self.root.update_idletasks()
-
-        outcome = self.controller.start(mode)
-        self.result = outcome.result
-        self.refresh_lights()
-
-        if not outcome.launched:
-            self._show_curtain(f"BRUH. NO.\n\n{outcome.message}", config.BAD_RED,
-                               [("What failed", self.open_security_panel),
-                                ("Try again", self._new_persistent)])
-            self.set_status("Launch blocked")
-            return
-
-        self.update_session_badge()
-        self.set_status(outcome.message)
-
-        # From here the lights stop being a launch-time snapshot. The worker re-runs
-        # every check once a minute and this window redraws from whatever it finds -
-        # including downgrading a light that was green at launch.
-        self._start_reverification()
-        # Original value, restored after an experiment. It was shortened to 250ms and a
-        # blank grey stage under a "WE GOOD" status was seen shortly afterwards, so the
-        # change was blamed and reverted. That attribution was NOT established:
-        # find_browser_window costs a ~258ms PowerShell round trip per attempt, which is
-        # far longer than the ~52ms it takes Chromium's compositor to appear, so no poll
-        # interval can actually race it. The blank stage was seen while several bruhswer
-        # instances were running at once, and its cause is still unknown.
-        #
-        # 1200ms stays because it is the value the shipped, working builds have used,
-        # not because the alternative was proven bad.
-        self._after(1200, self._try_host)
-
-    def _try_host(self) -> None:
-        """Poll for this session's Edge window, then host it. Verified, not assumed."""
-        self._host_attempts += 1
-        hwnd = self.controller.find_browser_window()
-        # Having a window is not the same as being able to paint into it. Wait for the
-        # compositor, or the reparent lands in the gap and the page never draws.
-        if hwnd and not embed.is_paint_ready(hwnd) and self._host_attempts < 25:
-            self._after(120, self._try_host)
-            return
-        if hwnd:
-            self.root.update_idletasks()
-            if embed.host_window(hwnd, self.stage.winfo_id()):
-                self.hosted_hwnd = hwnd
-                self.controller.set_hosted_window(hwnd)
-                # Without this the page renders but every keystroke is swallowed -
-                # the two processes have separate input queues until they are joined.
-                embed.attach_input(hwnd, self.root.winfo_id())
-                embed.focus(hwnd)
-                # Size it immediately, then again once Tk has settled the frame -
-                # Chromium sizes its compositor from the first WM_SIZE it receives, and
-                # a stale size is what leaves the page looking half-rendered.
-                #
-                # The curtain stays UP through all of this. It used to come down the
-                # instant the reparent succeeded, so the user watched Chromium resize
-                # and repaint itself for the next 900ms - bruhswer's frame appearing
-                # first and the page popping in after it. Now the stage is revealed
-                # once, onto a page that has already settled.
-                self._fit_hosted()
-                self._after(200, self._fit_hosted)
-                self._after(900, self._fit_hosted)
-                # AFTER the last fit, not before it. Revealing at 260ms left 640ms of
-                # Chromium repainting visible - the exact thing this was meant to stop,
-                # while a comment claimed the page had already settled.
-                self._after(950, self._reveal_stage)
-                self._watch_job = self._after(1500, self._watch)
-                return
-
-        if self._host_attempts < 25:
-            self._after(800, self._try_host)
-            return
-
-        # Honest failure: the browser IS running, it just is not inside our frame.
-        self._show_curtain(
-            "The browser is running, but bruhswer could not host\n"
-            "its window inside this frame.\n\n"
-            "It is open as a separate window and is still fully protected -\n"
-            "firewall policy, quarantine and session rules all still apply.",
-            config.WARN_AMBER,
-            [("Try again", self._rehost), ("Close the session", self.close_session)])
-        self.set_status("Browser running in its own window")
 
     # ----------------------------------------------------------------- curtain
 
@@ -461,393 +361,13 @@ class BrowserWindow:
         else:
             self.curtain_actions.place_forget()
 
-    def _reveal_stage(self) -> None:
-        """Drop the curtain onto a page that has already been sized and painted."""
-        if not self.hosted_hwnd or not embed.is_alive(self.hosted_hwnd):
-            return          # it went away while settling; _watch will report it
-        self._hide_curtain()
-        self.set_status("WE GOOD")
-
     def _hide_curtain(self) -> None:
         self.curtain.place_forget()
         self.curtain_actions.place_forget()
 
-    def _new_persistent(self) -> None:
-        self.open_session(session_manager.PERSISTENT)
-
-    def _rehost(self) -> None:
-        """Try to pull a still-running session's window back into the frame."""
-        self._host_attempts = 0
-        self.set_status("Looking for the browser window...")
-        self._try_host()
-
-    def _focus_address(self, _event=None) -> None:
-        """Take keyboard focus back from the hosted browser, then into the field."""
-        embed.focus_host(self.root.winfo_id())
-        self.address.focus_force()
-        self.clear_placeholder()
-
-    def _focus_browser(self, _event=None) -> None:
-        """Send keyboard focus to the hosted page, unless the user is in the address bar."""
-        if not self.hosted_hwnd:
-            return
-        try:
-            if self.root.focus_get() is self.address:
-                return
-        except (KeyError, tk.TclError):
-            pass
-        embed.focus(self.hosted_hwnd)
-
-    def _fit_hosted(self, _event=None) -> None:
-        if self.hosted_hwnd and embed.is_alive(self.hosted_hwnd):
-            embed.fit(self.hosted_hwnd, self.stage.winfo_width(),
-                      self.stage.winfo_height())
-
-    def _watch(self) -> None:
-        """Notice if the browser goes away. Never pretend it is still there (SS34)."""
-        try:
-            if not self.root.winfo_exists():
-                return
-        except tk.TclError:
-            return  # window already destroyed; a queued callback must not crash
-
-        if self.hosted_hwnd and not embed.is_alive(self.hosted_hwnd):
-            self.hosted_hwnd = None
-            # The controller must forget the handle too. Windows recycles handle
-            # values, so a stale one here means a later stop() can post WM_CLOSE to
-            # whatever unrelated window inherited the number.
-            self.controller.set_hosted_window(None)
-            # The hosted WINDOW is gone. That is not the same fact as the browser
-            # having closed: a session whose window was reparented or replaced is
-            # still running, still under policy, and still holding a profile.
-            #
-            # But is_running() is a ~258ms PowerShell snapshot, and on an ordinary
-            # close it is taken while Edge is still tearing down, so it will often
-            # still see processes. Reporting "still open and still protected" and
-            # then never asking again would latch exactly the kind of false
-            # reassurance this branch exists to avoid, so KEEP POLLING either way and
-            # let the message correct itself.
-            if self.controller.is_running():
-                self._show_curtain(
-                    "The browser is no longer inside bruhswer's frame.\n\n"
-                    "Checking whether the session is still running...",
-                    config.WARN_AMBER,
-                    [("Bring it back", self._rehost),
-                     ("Close the session", self.close_session)])
-                self.set_status("Window not hosted; re-checking the session")
-            else:
-                self._show_curtain("The browser window closed.", config.WARN_AMBER,
-                                   [("New session", self._new_persistent)])
-                self.set_status("Browser closed")
-            self.update_session_badge()
-            self._watch_job = self._after(1500, self._watch)
-            return
-
-        # No hosted window, but the poller is still alive: settle the message once the
-        # teardown snapshot is trustworthy rather than leaving the transient one up.
-        if self.hosted_hwnd is None and not self.controller.is_running():
-            if self.status_text.cget("text").startswith("Window not hosted"):
-                self._show_curtain("The browser window closed.", config.WARN_AMBER,
-                                   [("New session", self._new_persistent)])
-                self.set_status("Browser closed")
-                self.update_session_badge()
-            self._watch_job = self._after(1500, self._watch)
-            return
-        title = self.controller.browser_title()
-        if title:
-            clean = title.replace(" - Microsoft Edge", "").replace(
-                " - Microsoft Edge", "")
-            self.status_text.config(text=clean[:90])
-        self._watch_job = self._after(1500, self._watch)
-
-    # ------------------------------------------- runtime re-verification
-
-    def _arm_panic_key(self) -> None:
-        """Register the panic hotkey and show its REAL state, persistently.
-
-        Called from startup, not from the launch success path. Tying it to a
-        successful launch meant that a blocked launch - the state where a user is most
-        likely to want an escape hatch - left the key unregistered with nothing on
-        screen saying so.
-
-        The result goes to a permanent indicator rather than the status line. The
-        status line is overwritten within a second by the launch sequence ("WE GOOD"
-        at 950ms), so a user whose Ctrl+Shift+End is owned by another application
-        would have seen "UNAVAILABLE" flash past and be replaced by reassurance. That
-        is exactly the failure this module's docstring warns about: believing in an
-        escape hatch and discovering otherwise at the moment it is needed.
-        """
-        self._panic_fired = False
-        self._panic_hotkey.start()
-        self._refresh_panic_indicator()
-
-    def _refresh_panic_indicator(self) -> None:
-        """The PANIC light, driven by whether the key is registered RIGHT NOW."""
-        armed = self._panic_hotkey.available
-        self.lights["PANIC"].config(
-            fg=config.OK_GREEN if armed else config.BAD_RED)
-        self.panic_hint.config(
-            text=(config.PANIC_HOTKEY_LABEL if armed else "UNAVAILABLE"),
-            fg=config.FG_DIM if armed else config.BAD_RED)
-
-    def _start_reverification(self) -> None:
-        """Begin (or re-aim) the background re-verification for the current session."""
-        self._arm_panic_key()
-        self._verifier.start()
-        self._verifier.submit(self.controller.verification_request(
-            self.controller.session.mode if self.controller.session
-            else session_manager.PERSISTENT))
-        if self._drain_job is None:
-            self._drain_job = self._after(config.VERIFY_DRAIN_MS, self._drain)
-
-    def _drain(self) -> None:
-        """Apply whatever the worker finished. Tk thread only.
-
-        This is the ONLY place a worker result reaches a widget. Everything the worker
-        produces arrives here as plain data.
-        """
-        self._drain_job = None
-        try:
-            if self._closing or not self.root.winfo_exists():
-                return
-        except tk.TclError:
-            return      # interpreter already gone; a queued callback must not crash
-
-        # Panic first: if the key was pressed, nothing else this tick matters.
-        try:
-            self._panic_hotkey.events.get_nowait()
-        except queue.Empty:
-            pass
-        else:
-            self._on_panic()
-            return
-
-        for update in self._verifier.drain():
-            # STALE RESULT. The session changed while this pass was running, so it
-            # describes a profile that has been closed - and for a disposable session,
-            # deleted. Showing it would put a verdict about a dead session onto the
-            # lights of a live one.
-            if update.generation != self.controller.generation:
-                continue
-
-            # THE PASS RAISED AND MEASURED NOTHING. The previous result is still on
-            # screen, and leaving it there unannounced would present a stale set of
-            # green lights as current - the defect the worker exists to remove,
-            # reached by a different route. Say so; do not silently keep the old
-            # verdicts looking fresh.
-            if update.measurement_failed:
-                self.set_status("Security re-check FAILED to run - lights below are "
-                                "from the last successful check, not from now.")
-                continue
-
-            self.result = update.result
-            self.refresh_lights()
-            if update.regressions:
-                self._warn_regressions(update.regressions)
-            else:
-                self._clear_regression_warning(update)
-
-        self._drain_job = self._after(config.VERIFY_DRAIN_MS, self._drain)
-
-    def _on_panic(self) -> None:
-        """The panic key fired. Stop this session's browser at once.
-
-        ONE-SHOT. A held or repeated key press must not start a second teardown while
-        the first is still running - two concurrent destroy() passes over the same
-        profile would race each other and produce a report neither of them can stand
-        behind.
-
-        No confirmation, and no download-export prompt. Panic means panic, and this is
-        the one path that knowingly destroys a disposable session's unexported
-        quarantine. That is stated where the key is documented, not sprung afterwards.
-        """
-        if self._panic_fired:
-            return
-        self._panic_fired = True
-
-        # Detach first: the input queues are shared with a browser thread that is about
-        # to be terminated, and leaving them joined is how bruhswer's own window hangs.
-        embed.detach_input()
-        self._stop_reverification()
-        self.hosted_hwnd = None
-
-        self._show_curtain("PANIC\n\nStopping this session's browser...",
-                           config.BAD_RED)
-        self.root.update_idletasks()
-
-        ok, message = self.controller.panic_stop()
-        self.update_session_badge()
-        self._refresh_panic_indicator()
-        self._show_curtain(
-            f"PANIC\n\n{message}", config.OK_GREEN if ok else config.BAD_RED,
-            [("New session", self._new_persistent), ("Close bruhswer", self.on_close)])
-        self.set_status(message)
-
-    def _refresh_account_banner(self) -> None:
-        """Show or hide the Microsoft-account banner from the LATEST measurement.
-
-        STATE-DRIVEN, and deliberately not wired to the regression path. Two reasons
-        it could not be:
-
-          1. `privacy.account` is reported with enforceable=False, and
-             verify_worker._comparable() excludes unenforceable checks - correctly, so
-             that the permanently-FAIL net.loopback does not fire a warning every
-             cycle. This check would be excluded with it.
-          2. Even if it were included, the transition is UNKNOWN ("no profile yet" at
-             launch) -> FAIL once Edge signs itself in. find_regressions only reports
-             PASS -> not-PASS, so that transition is invisible to it.
-
-        So the banner reads the current verdict directly, every pass, and appears and
-        disappears with the measurement rather than with a transition.
-        """
-        if self.result is None:
-            return
-        session = self.controller.session
-        checks = [c for c in self.result.checks if c.check_id == "privacy.account"]
-        if not checks or session is None:
-            self.account_banner.pack_forget()
-            return
-        check = checks[0]
-
-        if check.verdict is Verdict.FAIL:
-            # Names the mode directly. This read `"DISPOSABLE" if ... else "This"` and
-            # then lower-cased it into the phrase "signed this {kind} session", so a
-            # persistent session rendered "Edge signed this this session" - a doubled
-            # word in the opening line of a warning whose whole job is to be believed.
-            kind = "disposable" if session.is_disposable else "persistent"
-            self.account_banner_text.config(
-                text=(f"BRUH. Edge signed this {kind} session into a Microsoft "
-                      f"account by itself. Syncing is off, but your identity is "
-                      f"attached, so this session is NOT anonymous. bruhswer cannot "
-                      f"prevent this - only machine-wide Edge policy can, and it "
-                      f"refuses to change every Edge profile on your PC."),
-                fg=config.WARN_AMBER)
-        elif (check.verdict is Verdict.UNKNOWN
-              and check.evidence == privacy_guard.PREFS_UNREADABLE):
-            self.account_banner_text.config(
-                text=("bruhswer could not read this profile, so it cannot tell whether "
-                      "Edge has signed the session into a Microsoft account. Treat it "
-                      "as NOT anonymous until it can."),
-                fg=config.FG_DIM)
-        else:
-            # PASS, or UNKNOWN for a reason other than an unreadable profile.
-            self.account_banner.pack_forget()
-            return
-
-        # before= keeps it directly above the page area no matter when it appears.
-        self.account_banner.pack(fill="x", padx=12, pady=(0, 6), before=self.stage)
-
-    def on_open_account_settings(self) -> None:
-        """Open Edge's sign-out page. Reports only that a tab was opened."""
-        _opened, message = self.controller.open_account_settings()
-        self.set_status(message)
         # The banner deliberately STAYS UP. It is removed only when a later
         # verification pass actually re-reads the profile and finds no account -
         # never on the strength of having opened a page the user may not have used.
-
-    def _clear_regression_warning(self, update) -> None:
-        """Take the warning back when every control it named is verifying again.
-
-        Needed because a warning with no way to withdraw it is its own kind of false
-        indicator. One failed PowerShell query flips a check to UNKNOWN for a single
-        cycle; the next cycle succeeds and it is PASS again. Since only PASS ->
-        not-PASS is ever reported, nothing would arrive to remove the red curtain, and
-        the user would be told something changed long after it had changed back.
-        """
-        if not self._warned_ids:
-            return
-        recovered = self._warned_ids & verify_worker.passing_ids(update.result)
-        self._warned_ids -= recovered
-        if self._warned_ids:
-            return          # some are still not verifying; the warning stands
-        self._hide_curtain()
-        self.set_status("Controls are verifying again.")
-
-    def _warn_regressions(self, regressions: tuple[tuple[str, str], ...]) -> None:
-        """A control that was verified at launch no longer verifies.
-
-        bruhswer WARNS; it does not close the session by itself. That is deliberate.
-        A verification pass can go non-PASS because a PowerShell query timed out under
-        load, and auto-killing the browser on a measurement error would destroy a
-        disposable session's unexported downloads over a transient. The user is told
-        precisely what changed and given the action; the decision stays theirs.
-        """
-        self._warned_ids |= {check_id for check_id, _title in regressions}
-        named = "\n".join(f"  - {title}" for _check_id, title in regressions)
-        self._show_curtain(
-            f"BRUH. Something changed while you were browsing.\n\n"
-            f"These controls verified when this session started, and do not now:\n\n"
-            f"{named}\n\n"
-            f"The browser is still open. bruhswer did not close it for you.",
-            config.BAD_RED,
-            [("What changed", self.open_security_panel),
-             ("Close the session", self.close_session),
-             ("Keep browsing", self._hide_curtain)])
-        self.set_status(f"{len(regressions)} control(s) no longer verify")
-
-    def _stop_reverification(self) -> None:
-        if self._drain_job is not None:
-            try:
-                self.root.after_cancel(self._drain_job)
-            except tk.TclError:
-                pass
-            self._drain_job = None
-        self._verifier.stop()
-        self._panic_hotkey.stop()
-
-        # REFRESH THE INDICATOR HERE, not in each caller. This method is what
-        # unregisters the hotkey, so it is what owes the user an honest light.
-        #
-        # close_session() called this and then never touched the PANIC light, so after
-        # closing a session the dot stayed green and the hint still read
-        # "Ctrl+Shift+End" while the listener was gone - a status light promising an
-        # escape hatch that would do nothing if pressed. _on_panic() happened to get
-        # this right, which is exactly how the inconsistency survived: the correct
-        # behaviour lived in one caller instead of in the operation itself.
-        #
-        # Skipped while closing, where the widgets are about to be destroyed anyway.
-        if not self._closing:
-            self._refresh_panic_indicator()
-
-    # ------------------------------------------------------------------ status
-
-    def refresh_lights(self) -> None:
-        if self.result is None:
-            return
-        mapping = {"HOST": "host.", "NETWORK": "net.", "PRIVACY": "privacy.",
-                   "DOWNLOADS": "downloads."}
-        for key, prefix in mapping.items():
-            checks = self.result.by_prefix(prefix)
-            if not checks:
-                self.lights[key].config(fg=config.OFF_GREY)
-                continue
-            self.lights[key].config(fg=_COLOUR[self.result.category(prefix)])
-
-        # Never green. Measured platform limitation, stated permanently (SS21).
-        self.lights["LOCALHOST"].config(fg=config.WARN_AMBER)
-        self.lights["VPN"].config(fg=config.OFF_GREY)
-        # Not a verdict from the verifier - a live fact about a Windows registration.
-        self._refresh_panic_indicator()
-
-        worst = self.result.category("net.")
-        blocked = bool(self.result.blockers)
-        self.bruh_button.config(
-            fg=config.BAD_RED if blocked else
-            (config.OK_GREEN if worst is Verdict.PASS else config.WARN_AMBER))
-
-        # Every path that redraws the lights also re-evaluates the account banner, so
-        # it can never lag behind the verdict it is derived from.
-        self._refresh_account_banner()
-
-    def update_session_badge(self) -> None:
-        session = self.controller.session
-        if session is None or not self.controller.is_running():
-            self.session_badge.config(text="NO SESSION", fg=config.FG_DIM)
-            return
-        if session.is_disposable:
-            self.session_badge.config(text="DISPOSABLE BRUH", fg=config.WARN_AMBER)
-        else:
-            self.session_badge.config(text="PERSISTENT BRUH", fg=config.OK_GREEN)
 
     def set_status(self, text: str) -> None:
         self.status_text.config(text=text[:110])
@@ -868,51 +388,15 @@ class BrowserWindow:
         _opened, message = self.controller.new_tab()
         self.set_status(message)
 
-    def on_close(self) -> None:
-        # Release the shared input queue FIRST, before any dialog. Leaving bruhswer's
-        # focus state tied to a browser thread that is about to die is how you get a
-        # hung window on exit - and the confirmation below is a modal Tk dialog with
-        # a grab, which is precisely the kind of thing that must not run while two
-        # GUI threads share an input queue.
-        embed.detach_input()
-
-        # Closing the window destroys a disposable session's downloads too, so the
-        # user gets the same chance to export them first. Cancelling leaves bruhswer
-        # open, which is the safe direction to fail - but it has to hand keyboard
-        # input back to the browser on the way out.
-        if not self._confirm_disposable_downloads():
-            self._reattach_input()
-            self.set_status("Still open. Export your downloads, then close again.")
-            return
-
-        # Mark closing BEFORE anything else, so a drain callback already queued for
-        # this instant returns immediately instead of touching widgets that are about
-        # to be destroyed.
-        self._closing = True
-        self._stop_reverification()
-
-        # Cancel EVERY poller, or Tk complains about a queued callback firing against
-        # a destroyed interpreter. This used to cancel _watch_job alone and leave the
-        # hosting and repaint timers armed.
-        self._cancel_all_jobs()
-
-        if self.controller.is_running():
-            ok, message = self.controller.stop()
-            if not ok:
-                # Do not claim a clean exit that did not happen (SS34).
-                dialogs.cleanup_incomplete(self.root, message, self.root.destroy)
-                return
-        self.root.destroy()
-
     # ------------------------------------------------------------------ panels
 
     def _panel(self, title: str, width: int = 640, height: int = 620) -> tk.Frame:
         return chrome.scroll_panel(self.root, title, width, height)
 
     def open_security_panel(self) -> None:
+        session = self.controller.snapshot()
         self.result = self.controller.verify(
-            self.controller.session.mode if self.controller.session
-            else session_manager.PERSISTENT)
+            session.mode if session.active else session_manager.PERSISTENT)
         self.refresh_lights()
         security_panel.render(self._panel("BRUH CHECK"), self.result)
 
@@ -920,17 +404,16 @@ class BrowserWindow:
         network_panel.render(self._panel("Network"), self.result)
 
     def open_privacy_panel(self) -> None:
-        profile = (self.controller.session.profile_dir
-                   if self.controller.session else config.PROFILE_PERSISTENT)
-        privacy_panel.render(self._panel("Privacy"), profile,
+        privacy_panel.render(self._panel("Privacy"),
+                             self.controller.snapshot().profile_dir,
                              self.controller.privacy_mode)
 
     def open_host_panel(self) -> None:
         host_panel.render(self._panel("Host Guard"))
 
     def open_quarantine_panel(self) -> None:
-        session_id = (self.controller.session.session_id
-                      if self.controller.session else "preview")
+        session = self.controller.snapshot()
+        session_id = session.session_id if session.active else "preview"
         quarantine_panel.render(self._panel("Quarantine", height=520), session_id,
                                 self._export, self._delete)
 
@@ -965,47 +448,6 @@ class BrowserWindow:
             menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
         finally:
             menu.grab_release()
-
-    def _reattach_input(self) -> None:
-        """Give keyboard input back to the hosted browser after a cancelled close.
-
-        Needed because the confirmation dialog is shown AFTER detach_input(). If the
-        user chooses to keep the session, bruhswer must put the shared input queue
-        back or they are returned to a browser window that renders fine and swallows
-        every keystroke - the exact defect that AttachThreadInput was added to fix.
-        """
-        if self.hosted_hwnd and embed.is_alive(self.hosted_hwnd):
-            embed.attach_input(self.hosted_hwnd, self.root.winfo_id())
-            embed.focus(self.hosted_hwnd)
-
-    def _confirm_disposable_downloads(self) -> bool:
-        """Ask before destroying downloads. Returns False if the user cancels."""
-        session = self.controller.session
-        if session is None or not session.is_disposable:
-            return True
-        pending = session_manager.pending_quarantine(session)
-        if not pending:
-            return True
-        return dialogs.confirm_disposable_downloads(self.root, pending)
-
-    def close_session(self) -> None:
-        # detach BEFORE the modal dialog, re-attach if the user backs out. Same
-        # reasoning as on_close.
-        embed.detach_input()
-        if not self._confirm_disposable_downloads():
-            self._reattach_input()
-            self.set_status("Session left open.")
-            return
-        # No session means nothing to re-verify. Left running, the worker would keep
-        # spawning 15 helper processes a minute against a profile that has just been
-        # deleted, and every result would be discarded as stale anyway.
-        self._stop_reverification()
-        ok, message = self.controller.stop()
-        self.hosted_hwnd = None
-        self._show_curtain(message, config.OK_GREEN if ok else config.BAD_RED,
-                           [("New session", self._new_persistent)])
-        self.update_session_badge()
-        self.set_status(message)
 
     def run(self) -> None:
         self.update_session_badge()

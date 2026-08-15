@@ -21,7 +21,8 @@ from . import config
 # logger, and "the caller should not have done that" is not a control.
 _REDACTIONS = (
     (re.compile(r"https?://[^\s\"']+", re.I), "<url-redacted>"),
-    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email-redacted>"),
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+     "<email-redacted>"),
     (re.compile(r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|cookie|authorization)"
                 r"\s*[:=]\s*\S+"), r"\1=<redacted>"),
 )

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import tkinter as tk
 
-from ... import config
 from . import chrome
 
 _GROUPS = [("Security  -  can something reach my stuff",
@@ -12,6 +11,16 @@ _GROUPS = [("Security  -  can something reach my stuff",
            ("Privacy  -  what can a website learn",
             ("privacy", "dns", "downloads")),
            ("Host  -  what other devices on this network can reach", ("host",))]
+
+_EVIDENCE_KEY = (
+    "The bracketed note after each verdict says what it rests on. "
+    "'measured now' means bruhswer observed the thing itself during this check. "
+    "'configuration read back' means it read a setting and did NOT watch it take "
+    "effect. 'earlier measurement' means a result from this project's Stage 4 testing "
+    "that is not re-run. 'reasoned, not measured' means it was worked out from other "
+    "facts. An OK backed by a setting is not the same as an OK backed by a measurement, "
+    "so they do not say the same thing."
+)
 
 _NOT_A_VM = ("bruhswer is not a virtual machine and does not claim to be one. It does "
              "not stop a browser exploit, a Windows kernel bug, or a fully compromised "
@@ -25,14 +34,10 @@ def render(body: tk.Misc, result) -> None:
         for check in result.checks:
             if check.check_id.split(".")[0] not in prefixes:
                 continue
-            # An unenforceable check is a statement about the platform, not a verdict.
-            # Green and red would both be wrong.
-            if not check.enforceable:
-                chrome.line(body, check.title, "NOT ENFORCEABLE", config.WARN_AMBER,
-                            check.detail)
-            else:
-                chrome.line(body, check.title, chrome.WORD[check.verdict],
-                            chrome.COLOUR[check.verdict], check.detail)
+            chrome.check_line(body, check)
+
+    chrome.heading(body, "How to read these")
+    chrome.paragraph(body, _EVIDENCE_KEY)
 
     chrome.heading(body, "What bruhswer is not")
     chrome.paragraph(body, _NOT_A_VM)

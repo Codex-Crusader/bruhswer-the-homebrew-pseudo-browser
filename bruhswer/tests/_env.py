@@ -61,7 +61,11 @@ def default_gateway() -> str | None:
         return None
     # A gateway outside the private ranges would not be covered by bruhswer's rules,
     # so a test using it as the "blocked LAN peer" would be measuring nothing.
-    return str(address) if address.is_private and not address.is_loopback else None
+    if address.is_private and not address.is_loopback:
+        # .compressed is the documented str form; str() on the IPv4Address |
+        # IPv6Address union is what static checkers cannot resolve.
+        return address.compressed
+    return None
 
 
 def require_gateway() -> str:
@@ -118,4 +122,4 @@ def host_lan_ip() -> str | None:
         address = ipaddress.ip_address(value)
     except ValueError:
         return None
-    return str(address) if not address.is_loopback else None
+    return address.compressed if not address.is_loopback else None

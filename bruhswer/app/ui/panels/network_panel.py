@@ -8,6 +8,7 @@ from ... import config
 from ...network import network_guard
 from . import chrome
 
+
 def state_colour(state) -> str:
     """Colour for one PolicyState. Shared by every UI - see config.POLICY_STATE_COLOUR.
 
@@ -26,6 +27,7 @@ def state_label(state) -> str:
         return text
     return f"{config.POLICY_STATE_UNKNOWN_LABEL}: {text}"
 
+
 _NO_VPN = ("No VPN is configured and no kill switch has been demonstrated. bruhswer "
            "will not pretend to offer one.")
 
@@ -33,13 +35,15 @@ _NO_VPN = ("No VPN is configured and no kill switch has been demonstrated. bruhs
 def render(body: tk.Misc, result) -> None:
     chrome.heading(body, "What the browser may reach")
     for label, state in network_guard.policy_summary():
-        chrome.line(body, label, state_label(state), state_colour(state))
+        # The evidence note is what stops a green BLOCKED row - which rests on the
+        # Stage 4 gate A16 experiment - from reading as a measurement taken just now.
+        chrome.line(body, label, state_label(state), state_colour(state),
+                    note_prefix=str(network_guard.policy_evidence(state)))
 
     chrome.heading(body, "DNS and VPN")
     for check in [c for c in (result.checks if result else [])
                   if c.check_id.startswith("dns.")]:
-        chrome.line(body, check.title, chrome.WORD[check.verdict],
-                    chrome.COLOUR[check.verdict], check.detail)
+        chrome.check_line(body, check)
     # Grey, not red: an absent feature is not a failed one.
     chrome.line(body, "VPN", "UNSUPPORTED", config.OFF_GREY, _NO_VPN)
 

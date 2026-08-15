@@ -12,9 +12,9 @@ WHY THIS EXISTS
     current, is the same defect wearing a timestamp.
 
 WHY IT NEEDS A THREAD
-    A full pass starts 15 helper processes - 14 PowerShell plus one icacls - at roughly
-    a quarter of a second each. Running that from a Tk `after()` callback would freeze
-    the window for several seconds, once a minute, forever.
+    A full pass starts 14 helper processes - 13 PowerShell plus one icacls - and takes
+    5.5 seconds measured. Running that from a Tk `after()` callback would freeze the
+    window for five seconds, once a minute, forever.
 
     So: a worker thread runs the checks, results go onto a `queue.Queue`, and a short
     `after()` tick on the Tk thread drains the queue.
@@ -64,6 +64,7 @@ class VerificationUpdate:
     # which is None until a first pass has ever succeeded.
     result: verifier.VerificationResult | None
     generation: int
+    verification_id: int = 0
     # (check_id, title) for checks that were PASS last time and are not PASS now.
     #
     # The ID is carried alongside the title so the UI can tell when a warned control
@@ -203,6 +204,10 @@ class VerifyWorker:
             thread.join(timeout=config.VERIFY_JOIN_TIMEOUT_SECONDS)
         self._thread = None
 
+        # Drop the baseline: it lives on this object, not the thread, so without this
+        # the next session's first pass is diffed against the previous session's last.
+        self._previous = None
+
     # --- worker thread ----------------------------------------------------------
 
     def _loop(self, stop: threading.Event) -> None:
@@ -219,7 +224,11 @@ class VerifyWorker:
                 pass
 
             if request is not None:
-                self._run_once(request)
+                try:
+                    self._run_once(request)
+                except Exception:              # noqa: BLE001  # lint: allow broad-except - nothing may kill this thread
+                    # _run_once guards the verification but not publishing its result.
+                    _log.exception("verification cycle failed; worker continues")
 
             # Wait for the interval, but return early for EITHER signal: stop (so
             # closing bruhswer does not leave a thread in a 60-second nap) or a newly
@@ -260,6 +269,7 @@ class VerifyWorker:
             # explicit failed-measurement update lets the window say so.
             self._results.put(VerificationUpdate(
                 result=self._previous, generation=request.generation,
+                verification_id=request.verification_id,
                 regressions=(), measurement_failed=True))
             return
 
@@ -270,4 +280,5 @@ class VerifyWorker:
                          ", ".join(check_id for check_id, _title in regressions))
         self._results.put(VerificationUpdate(
             result=result, generation=request.generation,
+            verification_id=request.verification_id,
             regressions=regressions))

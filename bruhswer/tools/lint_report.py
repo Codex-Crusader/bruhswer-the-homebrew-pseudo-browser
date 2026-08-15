@@ -83,9 +83,10 @@ def check_functions(tree: ast.AST, report: FileReport) -> None:
                 else:
                     used.add(sub.id)
             elif isinstance(sub, ast.Attribute):
-                # Annotated as the general expression type: this starts as an Attribute but
-                # walks down to whatever the chain's base is, so inferring the type from the
-                # first assignment makes every later step look like a type error.
+                # Annotated as the general expression type: this starts as an
+                # Attribute but walks down to whatever the chain's base is, so
+                # inferring it from the first assignment makes every later step
+                # look like a type error.
                 base: ast.expr = sub
                 while isinstance(base, ast.Attribute):
                     base = base.value
@@ -211,6 +212,16 @@ def check_instance_attrs(tree: ast.AST, report: FileReport) -> None:
     """Attributes first assigned outside __init__ hide part of an object's state."""
     for cls in ast.walk(tree):
         if not isinstance(cls, ast.ClassDef):
+            continue
+        # A DERIVED CLASS WITH NO __init__ DOES NOT OWN CONSTRUCTION, so "outside
+        # __init__" is not a finding about it - there is no __init__ for anything to be
+        # outside of. BrowserWindow's two mixins are exactly this: every attribute they
+        # touch is created by BrowserWindow.__init__ and declared as an annotation on
+        # WindowShell, so the state is visible in one place, which is what this rule is
+        # protecting. A base-less class with no __init__ is still checked.
+        owns_init = any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.name in _INIT_LIKE for node in cls.body)
+        if cls.bases and not owns_init:
             continue
         in_init: set[str] = set()
         elsewhere: dict[str, int] = {}

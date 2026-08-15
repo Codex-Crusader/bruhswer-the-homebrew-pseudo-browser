@@ -117,8 +117,11 @@ class TestWorkerLifecycle(unittest.TestCase):
         worker = verify_worker.VerifyWorker(interval=0.01)
         for generation in range(5):
             worker.submit(_FakeRequest(generation))
-        self.assertEqual(worker._requests.qsize(), 1)  # lint: allow protected-access - asserts the worker's threading contract
-        self.assertEqual(worker._requests.get_nowait().generation, 4)  # lint: allow protected-access - asserts the worker's threading contract
+        # protected-access: asserts the worker's threading contract
+        self.assertEqual(worker._requests.qsize(), 1)  # lint: allow protected-access
+        # protected-access: asserts the worker's threading contract.
+        self.assertEqual(
+            worker._requests.get_nowait().generation, 4)  # lint: allow protected-access
 
     def test_stop_returns_promptly_even_while_a_pass_is_running(self):
         """Closing bruhswer must not block on an in-flight PowerShell query.
@@ -225,8 +228,10 @@ class TestWorkerRestartsAfterStop(unittest.TestCase):
                 self.fail("worker never ran again after stop()/start(); "
                           "re-verification was silently dead for the new session")
             self.assertEqual(seen, 1)
-            self.assertIsNotNone(worker._thread)  # lint: allow protected-access - asserts the worker's threading contract
-            self.assertTrue(worker._thread.is_alive())  # lint: allow protected-access - asserts the worker's threading contract
+            # protected-access: asserts the worker's threading contract
+            self.assertIsNotNone(worker._thread)  # lint: allow protected-access
+            # protected-access: asserts the worker's threading contract
+            self.assertTrue(worker._thread.is_alive())  # lint: allow protected-access
         finally:
             verify_worker.ctrl.run_verification = original
             worker.stop()
@@ -309,10 +314,11 @@ class TestWarningCanBeWithdrawn(unittest.TestCase):
 
 
 class _FakeRequest:
-    """Minimal stand-in for a VerificationRequest - only `generation` is read here."""
+    """Minimal stand-in for a VerificationRequest."""
 
-    def __init__(self, generation: int) -> None:
+    def __init__(self, generation: int, verification_id: int = 0) -> None:
         self.generation = generation
+        self.verification_id = verification_id
 
 
 if __name__ == "__main__":

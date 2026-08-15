@@ -32,7 +32,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app import config  # noqa: E402
+from app import config, sysquery  # noqa: E402
 from app.browser import tokens  # noqa: E402
 from app.network import network_guard  # noqa: E402
 from app.privacy import privacy_guard  # noqa: E402
@@ -42,6 +42,11 @@ from app.verdict import Verdict  # noqa: E402
 
 def _facts(pid: int, *, readable: bool, integrity: str | None = "UNTRUSTED"):
     return tokens.TokenFacts(pid, readable, integrity, 0, readable=readable)
+
+
+def _probe(value, status=sysquery.ProbeStatus.OK):
+    """A successful sysquery.Probe carrying `value`, for mocking a query."""
+    return sysquery.Probe(value, status, 0.0)
 
 
 class TestUnreadableRendererIsNeverGreen(unittest.TestCase):
@@ -133,7 +138,9 @@ class TestUnreadablePreferencesIsNeverGreen(unittest.TestCase):
                                lambda p: (False, privacy_guard.PREFS_UNREADABLE)), \
              mock.patch.object(privacy_guard, "verify_applied",
                                lambda p, m: (2, 2, [])):
-            checks = verifier._privacy_checks(Path("profile"), "standard")  # lint: allow protected-access - pins an internal branch that produced a false PASS
+            # protected-access: pins an internal branch that produced a false PASS.
+            checks = verifier._privacy_checks(  # lint: allow protected-access
+                Path("profile"), "standard")
 
         account = [c for c in checks if c.check_id == "privacy.account"]
         self.assertEqual(len(account), 1, "privacy.account check went missing")
@@ -152,7 +159,9 @@ class TestUnreadablePreferencesIsNeverGreen(unittest.TestCase):
                 lambda p: (False, "No Microsoft account is signed into this profile.")), \
              mock.patch.object(privacy_guard, "verify_applied",
                                lambda p, m: (2, 2, [])):
-            checks = verifier._privacy_checks(Path("profile"), "standard")  # lint: allow protected-access - pins an internal branch that produced a false PASS
+            # protected-access: pins an internal branch that produced a false PASS.
+            checks = verifier._privacy_checks(  # lint: allow protected-access
+                Path("profile"), "standard")
         account = next(c for c in checks if c.check_id == "privacy.account")
         self.assertIs(account.verdict, Verdict.PASS)
 
@@ -235,9 +244,12 @@ class TestIPv6IsNotClaimedAsMeasured(unittest.TestCase):
                 self.assertIn(str(state), config.POLICY_STATE_COLOUR)
 
     def test_an_unknown_ipv6_effect_check_exists(self):
-        with mock.patch.object(network_guard.sysquery, "bruhswer_rules", lambda: []), \
-             mock.patch.object(network_guard.sysquery, "is_elevated", lambda: False), \
-             mock.patch.object(network_guard.sysquery, "network_profiles", lambda: []):
+        with mock.patch.object(network_guard.sysquery, "bruhswer_rules",
+                               lambda: _probe([])), \
+             mock.patch.object(network_guard.sysquery, "is_elevated_probe",
+                               lambda: _probe(False)), \
+             mock.patch.object(network_guard.sysquery, "network_profiles",
+                               lambda: _probe([])):
             checks = network_guard.verify(Path("msedge.exe"))
 
         effect = [c for c in checks if c.check_id == "net.rule.ipv6.effect"]

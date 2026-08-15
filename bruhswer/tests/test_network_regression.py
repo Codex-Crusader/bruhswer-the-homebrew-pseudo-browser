@@ -87,8 +87,12 @@ def main() -> int:
         return 1
 
     rules = sysquery.bruhswer_rules()
-    if len(rules) < 2:
-        print(f"\nNetwork policy is not applied ({len(rules)} rules found).")
+    if not rules.ok:
+        print(f"\nCould not read the firewall rules ({rules.status}); "
+              f"this test cannot establish anything.")
+        return 1
+    if len(rules.value) < 2:
+        print(f"\nNetwork policy is not applied ({len(rules.value)} rules found).")
         print("Run: tools\\bruhswer-netpolicy.ps1 -Action apply")
         return 1
 
@@ -138,7 +142,7 @@ def main() -> int:
     # ---------------------------------------------------------------- SS12
     print("\nSS12  Are the rules still scoped to the browser only?")
 
-    for rule in rules:
+    for rule in rules.value:
         program = str(rule.get("Program", "")).lower()
         check(f"{rule.get('Name')} names only the browser executable",
               program == str(edge).lower(), program or "<no program filter>")

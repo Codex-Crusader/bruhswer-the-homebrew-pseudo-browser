@@ -21,7 +21,7 @@ from pathlib import Path
 from .. import config
 from ..browser import tokens
 from ..logging_setup import get_logger
-from ..verdict import Check, Verdict
+from ..verdict import Check, EvidenceKind, UnknownReason, Verdict
 
 _log = get_logger("browserguard")
 
@@ -138,7 +138,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         Verdict.PASS if inside else Verdict.FAIL, critical=True,
         detail=(f"Profile is at {resolved}." if inside else
                 "Profile points outside the bruhswer folder. Launch blocked."),
-        evidence=f"profile={resolved} root={root}"))
+        evidence=f"profile={resolved} root={root}",
+        evidence_kind=EvidenceKind.LIVE))
 
     # --- the browser must not be pointed at the user's real profiles ------------
     forbidden_parents = [
@@ -153,15 +154,20 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         Verdict.PASS if not collides else Verdict.FAIL, critical=True,
         detail=("bruhswer uses its own profile; your everyday browser data is untouched."
                 if not collides else "Profile overlaps your normal browser data."),
-        evidence=f"collides={collides}"))
+        evidence=f"collides={collides}",
+        evidence_kind=EvidenceKind.LIVE))
 
     # --- ACL ---------------------------------------------------------------------
     acl = _read_acl(profile_dir)
     if not acl:
         checks.append(Check(
             "browser.profile.acl", "Profile folder permissions", Verdict.UNKNOWN,
-            critical=False, detail="Could not read the folder's permissions.",
-            evidence="icacls returned nothing"))
+            critical=False,
+            detail=("bruhswer could not read the profile folder's permissions, so it "
+                    "cannot say who else can reach the browsing data."),
+            evidence="icacls returned nothing",
+            evidence_kind=EvidenceKind.READ_BACK,
+            unknown_reason=UnknownReason.UNREADABLE))
     else:
         broad = [token for token in ("Everyone", "BUILTIN\\Users",
                                      "ALL APPLICATION PACKAGES")
@@ -171,7 +177,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
             Verdict.PASS if not broad else Verdict.FAIL, critical=False,
             detail=("Restricted to your account." if not broad else
                     f"Readable by: {', '.join(broad)}"),
-            evidence=f"broad_principals={broad}"))
+            evidence=f"broad_principals={broad}",
+            evidence_kind=EvidenceKind.READ_BACK))
 
     # --- command line -------------------------------------------------------------
     found_dangerous = [flag for flag in argv[1:]
@@ -182,7 +189,10 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         detail=("The browser is started with its sandbox and TLS checks intact."
                 if not found_dangerous else
                 f"Refusing these flags: {found_dangerous}"),
-        evidence=f"dangerous={found_dangerous}"))
+        evidence=f"dangerous={found_dangerous}",
+        # INFERENCE: this inspects the argv bruhswer just built, and asks Windows
+        # nothing. It still catches a code change adding a dangerous flag.
+        evidence_kind=EvidenceKind.INFERENCE))
 
     profile_flags = [a for a in argv if a.startswith("--user-data-dir=")]
     checks.append(Check(
@@ -190,7 +200,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         Verdict.PASS if len(profile_flags) == 1 else Verdict.FAIL, critical=True,
         detail=("One profile directory specified." if len(profile_flags) == 1
                 else f"{len(profile_flags)} profile arguments found."),
-        evidence=f"count={len(profile_flags)}"))
+        evidence=f"count={len(profile_flags)}",
+        evidence_kind=EvidenceKind.INFERENCE))
 
     # --- the boundary that actually exists, stated accurately ---------------------
     checks.append(Check(
@@ -199,7 +210,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         detail=("bruhswer never passes --no-sandbox or any flag that weakens the "
                 "renderer sandbox. Whether the sandbox is actually in force is "
                 "measured separately, from the live processes."),
-        evidence="DANGEROUS_FLAGS enforced in edge.build_command"))
+        evidence="DANGEROUS_FLAGS enforced in edge.build_command",
+        evidence_kind=EvidenceKind.INFERENCE))
 
     return checks
 
@@ -231,14 +243,18 @@ def verify_renderer_sandbox(
             detail=("bruhswer could not ask Windows which renderer processes are "
                     "running, so it cannot say whether page content is contained. "
                     "This is a failed measurement, not a finding about the browser."),
-            evidence="renderer pid query failed")]
+            evidence="renderer pid query failed",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.PROBE_ERROR)]
 
     if not renderer_pids:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
             critical=False,
             detail="No browser session is running, so there is nothing to measure yet.",
-            evidence="no renderer pids")]
+            evidence="no renderer pids",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.NO_SESSION)]
 
     facts = tokens.summarise_renderers(renderer_pids)
     measured = facts["measured"]
@@ -248,7 +264,9 @@ def verify_renderer_sandbox(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
             critical=False,
             detail="Renderer processes exist but their tokens could not be read.",
-            evidence=f"pids={len(renderer_pids)} readable=0")]
+            evidence=f"pids={len(renderer_pids)} readable=0",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.UNREADABLE)]
 
     contained = facts["untrusted"]
     appcontainer = facts["appcontainer"]
@@ -270,7 +288,9 @@ def verify_renderer_sandbox(
                     f"{contained} UNTRUSTED. This is reported as UNKNOWN rather than "
                     f"passing on the ones that happened to be readable."),
             evidence=f"pids={len(renderer_pids)} readable={measured} "
-                     f"unreadable={unreadable} untrusted={contained}")]
+                     f"unreadable={unreadable} untrusted={contained}",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.PARTIAL_EVIDENCE)]
 
     if contained == measured:
         verdict = Verdict.PASS
@@ -296,4 +316,5 @@ def verify_renderer_sandbox(
                            f"untrusted={contained} "
                            f"appcontainer={appcontainer} "
                            f"zero_privileges={facts['zero_privileges']} "
-                           f"worst_integrity={facts['worst_integrity']}")]
+                           f"worst_integrity={facts['worst_integrity']}",
+                  evidence_kind=EvidenceKind.LIVE)]

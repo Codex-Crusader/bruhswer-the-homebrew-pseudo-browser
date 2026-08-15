@@ -131,6 +131,7 @@ def _to_signed32(value: int) -> int:
     value &= _U32
     return value - 0x100000000 if value >= 0x80000000 else value
 
+
 _WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
 # CONSTANT script. The only substituted value is a profile directory name that bruhswer
@@ -541,7 +542,7 @@ def work_area() -> tuple[int, int, int, int]:
                     rect.right - rect.left, rect.bottom - rect.top)
     except (OSError, ctypes.ArgumentError):
         pass
-    return (0, 0, USER32.GetSystemMetrics(0), USER32.GetSystemMetrics(1))
+    return 0, 0, USER32.GetSystemMetrics(0), USER32.GetSystemMetrics(1)
 
 
 def enable_dpi_awareness() -> str:
@@ -608,6 +609,88 @@ def is_paint_ready(hwnd: int) -> bool:
     except (ctypes.ArgumentError, OSError):
         return False
     return found["d3d"] or found["widget"]
+
+
+SPI_GETHIGHCONTRAST = 0x0042
+HCF_HIGHCONTRASTON = 0x00000001
+
+
+class _HIGHCONTRAST(ctypes.Structure):
+    _fields_ = [("cbSize", wt.UINT), ("dwFlags", wt.DWORD),
+                ("lpszDefaultScheme", ctypes.c_wchar_p)]
+
+
+def high_contrast() -> bool | None:
+    """True if Windows high-contrast mode is on. None if it could not be asked.
+
+    None rather than False on failure: bruhswer uses this to decide whether its own
+    palette is safe to apply, and guessing "not high contrast" is how a user who needs
+    the accessible theme silently does not get it.
+    """
+    info = _HIGHCONTRAST()
+    info.cbSize = ctypes.sizeof(_HIGHCONTRAST)
+    try:
+        if not USER32.SystemParametersInfoW(SPI_GETHIGHCONTRAST, info.cbSize,
+                                            ctypes.byref(info), 0):
+            return None
+    except (OSError, ctypes.ArgumentError, AttributeError):
+        return None
+    return bool(info.dwFlags & HCF_HIGHCONTRASTON)
+
+
+def prefers_dark() -> bool | None:
+    """Whether Windows apps are set to dark mode. None if it could not be read.
+
+    Read from the user's own registry hive with winreg - no subprocess, and nothing
+    outside HKCU is touched.
+    """
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
+    except (OSError, ValueError):
+        return None
+    return not bool(value)
+
+
+def is_fitted(hwnd: int, width: int, height: int, tolerance: int = 2) -> bool:
+    """True once the hosted window AND its render widget are the requested size.
+
+    is_paint_ready() cannot answer this. It tests that a compositor surface EXISTS,
+    which stays true across a resize, so it reports ready the instant fit() is called
+    and says nothing about whether Chromium has caught up to the new size. That is the
+    gap the old fixed 200/900ms timers were papering over.
+
+    Both the top level and the render widget are checked: Chromium resizes the outer
+    window synchronously and its compositor surface on its own schedule, so the outer
+    one alone would report fitted while the page was still the old size.
+    """
+    if not (is_alive(hwnd) and width > 0 and height > 0):
+        return False
+    outer_w, outer_h = _client_size(hwnd)
+    if abs(outer_w - width) > tolerance or abs(outer_h - height) > tolerance:
+        return False
+
+    widget = {"seen": False, "ok": False}
+
+    def _visit(child, _):
+        if _class_name(child) == "Chrome_RenderWidgetHostHWND":
+            widget["seen"] = True
+            child_w, child_h = _client_size(child)
+            widget["ok"] = (abs(child_w - width) <= tolerance
+                            and abs(child_h - height) <= tolerance)
+        return True
+
+    try:
+        USER32.EnumChildWindows(wt.HWND(hwnd), _WNDENUMPROC(_visit), 0)
+    except (ctypes.ArgumentError, OSError):
+        return False
+    # No render widget at all means there is nothing further to wait for; the outer
+    # window matching is the most that can be established.
+    return widget["ok"] if widget["seen"] else True
 
 
 def _class_name(hwnd: int) -> str:

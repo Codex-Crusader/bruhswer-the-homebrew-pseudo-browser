@@ -134,7 +134,8 @@ REJECTED: tuple[tuple[str, str], ...] = (
     ("Screen resolution spoofing",
      "Reported size then disagrees with the actual window, which is itself a signal."),
     ("Timezone / locale spoofing",
-     "Contradicts HTTP language headers and observable latency; makes the profile rarer."),
+     "Contradicts HTTP language headers and observable latency; makes the "
+     "profile rarer."),
     ("Canvas / WebGL noise injection",
      "Detectable as noise, and unstable output is a stronger identifier than a common "
      "GPU string. Needs engine support Edge does not expose to us."),

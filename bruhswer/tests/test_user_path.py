@@ -162,8 +162,9 @@ def main() -> int:
     if stragglers:
         print("[setup] stopped Edge processes left over from an earlier run")
 
-    if len(sysquery.bruhswer_rules()) < 2:
-        print("Network policy is not applied. Run tools\\bruhswer-netpolicy.ps1 -Action apply")
+    if len(sysquery.bruhswer_rules().value) < 2:
+        print("Network policy is not applied. "
+              "Run tools\\bruhswer-netpolicy.ps1 -Action apply")
         return 1
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), _H)

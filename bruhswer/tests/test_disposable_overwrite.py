@@ -72,7 +72,9 @@ class TestOverwriteTree(unittest.TestCase):
         for path in targets:
             path.write_bytes(SECRET)
 
-        report = session_manager._overwrite_tree(profile, self.root)  # lint: allow protected-access - the overwrite walker is what this suite tests
+        # protected-access: the overwrite walker is what this suite tests.
+        report = session_manager._overwrite_tree(  # lint: allow protected-access
+            profile, self.root)
 
         self.assertEqual(report.overwritten, len(targets))
         self.assertEqual(report.skipped, 0)
@@ -91,7 +93,9 @@ class TestOverwriteTree(unittest.TestCase):
         big = profile / "Cache_Data"
         big.write_bytes(b"x" * (config.DISPOSABLE_OVERWRITE_MAX_BYTES + 1))
 
-        report = session_manager._overwrite_tree(profile, self.root)  # lint: allow protected-access - the overwrite walker is what this suite tests
+        # protected-access: the overwrite walker is what this suite tests.
+        report = session_manager._overwrite_tree(  # lint: allow protected-access
+            profile, self.root)
 
         self.assertEqual(report.overwritten, 1)
         self.assertEqual(report.skipped_large, 1)
@@ -114,7 +118,9 @@ class TestOverwriteTree(unittest.TestCase):
         profile = self.root / "profile"
         profile.mkdir()
         (profile / "empty").write_bytes(b"")
-        report = session_manager._overwrite_tree(profile, self.root)  # lint: allow protected-access - the overwrite walker is what this suite tests
+        # protected-access: the overwrite walker is what this suite tests.
+        report = session_manager._overwrite_tree(  # lint: allow protected-access
+            profile, self.root)
         self.assertEqual(report.overwritten, 1)
 
 
@@ -155,7 +161,9 @@ class TestOverwriteRefusesReparsePoints(unittest.TestCase):
         self.assertFalse(link.is_symlink(),
                          "expected a junction to report is_symlink() == False")
 
-        report = session_manager._overwrite_tree(profile, self.root)  # lint: allow protected-access - the overwrite walker is what this suite tests
+        # protected-access: the overwrite walker is what this suite tests.
+        report = session_manager._overwrite_tree(  # lint: allow protected-access
+            profile, self.root)
 
         self.assertEqual(victim.read_bytes(), SECRET,
                          "the overwrite pass wrote THROUGH a junction, outside the "

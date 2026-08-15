@@ -31,6 +31,10 @@ SUITES = [
     # milliseconds rather than after the multi-minute browser suites.
     ("address bar properties", "test_urls_fuzz.py", False),
     ("overclaim regressions", "test_overclaim_regressions.py", False),
+    ("evidence model", "test_evidence_model.py", False),
+    ("accessibility / contrast", "test_accessibility.py", False),
+    ("window surface after split", "test_window_surface.py", False),
+    ("session races / stale UI", "test_session_races.py", False),
     ("runtime re-verification", "test_reverification.py", False),
     ("disposable overwrite", "test_disposable_overwrite.py", False),
     ("file manifest", "test_integrity.py", False),
@@ -64,7 +68,7 @@ def main() -> int:
     print(f"{config.MOAI} bruhswer regression suite")
     print("=" * 74)
 
-    policy_applied = len(sysquery.bruhswer_rules()) >= 2
+    policy_applied = len(sysquery.bruhswer_rules().value) >= 2
     if not policy_applied:
         print("\nNetwork policy is NOT applied - suites that need it will be SKIPPED.")
         print("Apply it with: tools\\bruhswer-netpolicy.ps1 -Action apply\n")

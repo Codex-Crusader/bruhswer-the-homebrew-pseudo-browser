@@ -480,21 +480,27 @@ class TestProfileCollisionUsesPathAncestry(unittest.TestCase):
             "User Data"
 
     def test_sibling_with_a_prefix_name_is_not_a_collision(self):
-        self.assertFalse(browser_guard._is_within(  # lint: allow protected-access - path-ancestry helper is the unit under test
+        # protected-access: path-ancestry helper is the unit under test
+        self.assertFalse(browser_guard._is_within(  # lint: allow protected-access
             Path(str(self.edge) + "-Evil"), self.edge))
 
     def test_the_directory_itself_is_a_collision(self):
-        self.assertTrue(browser_guard._is_within(self.edge, self.edge))  # lint: allow protected-access - path-ancestry helper is the unit under test
+        # protected-access: the path-ancestry helper is the unit under test.
+        self.assertTrue(browser_guard._is_within(  # lint: allow protected-access
+            self.edge, self.edge))
 
     def test_a_profile_inside_it_is_a_collision(self):
-        self.assertTrue(browser_guard._is_within(self.edge / "Default", self.edge))  # lint: allow protected-access - path-ancestry helper is the unit under test
+        self.assertTrue(browser_guard._is_within(  # lint: allow protected-access
+            self.edge / "Default", self.edge))
 
     def test_windows_path_case_does_not_defeat_the_check(self):
-        self.assertTrue(browser_guard._is_within(  # lint: allow protected-access - path-ancestry helper is the unit under test
+        # protected-access: path-ancestry helper is the unit under test
+        self.assertTrue(browser_guard._is_within(  # lint: allow protected-access
             Path(str(self.edge).upper()) / "Default", self.edge))
 
     def test_bruhswers_own_profile_is_not_a_collision(self):
-        self.assertFalse(browser_guard._is_within(  # lint: allow protected-access - path-ancestry helper is the unit under test
+        # protected-access: path-ancestry helper is the unit under test
+        self.assertFalse(browser_guard._is_within(  # lint: allow protected-access
             config.PROFILE_PERSISTENT, self.edge))
 
 

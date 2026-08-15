@@ -129,7 +129,8 @@ class BruhswerUI:
                  bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
 
         tk.Label(head, text=config.TAGLINE, font=("Segoe UI", 10),
-                 bg=config.BG_DARK, fg=config.FG_DIM).pack(side="left", padx=16, pady=(14, 0))
+                 bg=config.BG_DARK, fg=config.FG_DIM).pack(
+        side="left", padx=16, pady=(14, 0))
 
         controls = tk.Frame(head, bg=config.BG_DARK)
         controls.pack(side="right")
@@ -168,7 +169,8 @@ class BruhswerUI:
 
         tk.Button(foot, text="Re-check", command=self.refresh,
                   bg=config.BG_RAISED, fg=config.BRAND_WHITE, bd=0, padx=14, pady=8,
-                  font=("Segoe UI", 10), cursor="hand2").pack(side="right", padx=6, pady=8)
+                  font=("Segoe UI", 10), cursor="hand2").pack(
+        side="right", padx=6, pady=8)
 
     # --- tabs -------------------------------------------------------------------
 
@@ -227,13 +229,17 @@ class BruhswerUI:
             row = tk.Frame(body, bg=config.BG_PANEL)
             row.pack(fill="x", padx=18, pady=3)
             tk.Label(row, text=setting.key, font=("Consolas", 9), anchor="w",
-                     bg=config.BG_PANEL, fg=config.BRAND_YELLOW).pack(fill="x", padx=10, pady=(6, 0))
+                     bg=config.BG_PANEL, fg=config.BRAND_YELLOW).pack(
+                fill="x", padx=10, pady=(6, 0))
             tk.Label(row, text=f"Reduces: {setting.reduces}", font=("Segoe UI", 9),
                      anchor="w", justify="left", wraplength=740,
                      bg=config.BG_PANEL, fg=config.BRAND_WHITE).pack(fill="x", padx=10)
-            tk.Label(row, text=f"Costs: {setting.costs}   |   Fingerprint: {setting.fingerprint_effect}",
+            tk.Label(row,
+                     text=f"Costs: {setting.costs}   |   "
+                          f"Fingerprint: {setting.fingerprint_effect}",
                      font=("Segoe UI", 8), anchor="w", justify="left", wraplength=740,
-                     bg=config.BG_PANEL, fg=config.FG_DIM).pack(fill="x", padx=10, pady=(0, 6))
+                     bg=config.BG_PANEL, fg=config.FG_DIM).pack(
+                fill="x", padx=10, pady=(0, 6))
 
         self._section(body, "Things bruhswer refuses to do")
         for name, why in privacy_guard.REJECTED:
@@ -284,7 +290,8 @@ class BruhswerUI:
     # --- actions ----------------------------------------------------------------
 
     def refresh(self) -> None:
-        self.status_line.config(text="Checking whether this website can touch your stuff...")
+        self.status_line.config(
+            text="Checking whether this website can touch your stuff...")
         self.root.update_idletasks()
 
         mode = self.mode_var.get()
@@ -377,7 +384,8 @@ class BruhswerUI:
             card = tk.Frame(body, bg=config.BG_PANEL)
             card.pack(fill="x", padx=18, pady=6)
             tk.Label(card, text=fix["title"], font=("Segoe UI", 10, "bold"), anchor="w",
-                     bg=config.BG_PANEL, fg=config.BRAND_YELLOW).pack(fill="x", padx=12, pady=(8, 2))
+                     bg=config.BG_PANEL, fg=config.BRAND_YELLOW).pack(
+                fill="x", padx=12, pady=(8, 2))
             for key, prefix in (("risk", "Risk"), ("change", "Change"),
                                 ("rollback", "Undo")):
                 tk.Label(card, text=f"{prefix}: {fix[key]}", font=("Segoe UI", 9),

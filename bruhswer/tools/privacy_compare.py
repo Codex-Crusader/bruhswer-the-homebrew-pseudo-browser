@@ -56,7 +56,9 @@ PROBE_HTML = """<!doctype html><html><head><meta charset="utf-8">
 <pre id="out">pending</pre>
 <script>
 const R = {};
-function safe(name, fn) { try { R[name] = fn(); } catch (e) { R[name] = "ERR:" + e.name; } }
+function safe(name, fn) {
+  try { R[name] = fn(); } catch (e) { R[name] = "ERR:" + e.name; }
+}
 
 safe("ua", () => navigator.userAgent);
 safe("platform", () => navigator.platform);
@@ -143,7 +145,8 @@ jobs.push(new Promise(res => {
       if (!e.candidate) { res(); return; }
       const c = e.candidate.candidate;
       R.webrtcCandidates.push(c);
-      const m = c.match(/([0-9]{1,3}(?:\\.[0-9]{1,3}){3}|[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,})/i);
+      const m = c.match(
+        /([0-9]{1,3}(?:\\.[0-9]{1,3}){3}|[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,})/i);
       if (m) { R.webrtcHostAddrs.push(m[1]); }
     };
     pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => res());
@@ -202,7 +205,8 @@ def start_servers() -> tuple:
             .replace("THIRD_PARTY_URL", f"http://{HOST_B}:{PORT_B}/tp")
             .replace("RESULT_ID_TOKEN", RESULT_ID))
     a = http.server.ThreadingHTTPServer((HOST_A, PORT_A), _make_handler(page))
-    b = http.server.ThreadingHTTPServer(("127.0.0.1", PORT_B), _make_handler(THIRD_PARTY_HTML))
+    b = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", PORT_B), _make_handler(THIRD_PARTY_HTML))
     for s in (a, b):
         threading.Thread(target=s.serve_forever, daemon=True).start()
     return a, b
@@ -238,7 +242,8 @@ def flatten(result: dict) -> dict:
             for perm, state in sorted(value.items()):
                 flat[f"permission.{perm}"] = state
         elif key == "webrtcCandidates":
-            flat["webrtc.candidateCount"] = len(value) if isinstance(value, list) else value
+            flat["webrtc.candidateCount"] = (
+                len(value) if isinstance(value, list) else value)
         elif key == "webrtcHostAddrs":
             addrs = sorted(set(value)) if isinstance(value, list) else []
             private = [a for a in addrs

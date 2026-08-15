@@ -40,7 +40,8 @@ _results: list[bool] = []
 
 def check(name: str, passed: bool, detail: str = "") -> None:
     _results.append(passed)
-    print(f"  [{'PASS' if passed else 'FAIL'}] {name}" + (f"  -  {detail}" if detail else ""))
+    print(f"  [{'PASS' if passed else 'FAIL'}] {name}"
+          + (f"  -  {detail}" if detail else ""))
 
 
 def uninstall_entries() -> list[str]:

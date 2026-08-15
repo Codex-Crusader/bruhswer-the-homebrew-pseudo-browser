@@ -323,7 +323,8 @@ function settle(w, ms) {
 }
 async function go() {
   for (const x of T) {
-    try { await fetch(x.o + "/probe/" + x.t + "-get", {mode:"no-cors",cache:"no-store"}); } catch(e) {}
+    try { await fetch(x.o + "/probe/" + x.t + "-get",
+                      {mode:"no-cors",cache:"no-store"}); } catch(e) {}
     try { await fetch(x.o + "/probe/" + x.t + "-post", {method:"POST",mode:"no-cors",
           body:"probe",cache:"no-store"}); } catch(e) {}
     try {

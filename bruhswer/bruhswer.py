@@ -166,8 +166,13 @@ def run_uninstall() -> int:
 
     rules = sysquery.bruhswer_rules()
     print("\n1. FIREWALL RULES  (need Administrator - bruhswer will not elevate itself)")
-    if rules:
-        for rule in rules:
+    if not rules.ok:
+        # "none present" here would tell the user to skip a cleanup step that may be
+        # the one leaving Edge blocked after bruhswer is gone.
+        print(f"     could not read the firewall rules ({rules.status}). Check for "
+              f"rules named {config.RULE_PREFIX}-* yourself before assuming none exist.")
+    elif rules.value:
+        for rule in rules.value:
             print(f"     {rule.get('Name')}")
         print("\n   These are what stop the browser reaching your router and LAN.")
         print("   LEAVING THEM BEHIND after deleting bruhswer means Edge stays blocked")

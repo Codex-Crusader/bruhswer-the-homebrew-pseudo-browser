@@ -22,7 +22,8 @@ from pathlib import Path
 
 from .. import config, sysquery
 from ..logging_setup import get_logger
-from ..verdict import Check, Verdict
+from ..verdict import (Check, EvidenceKind, UnknownReason, Verdict,
+                       reason_for_probe)
 
 _log = get_logger("edge")
 
@@ -62,21 +63,31 @@ def verify_runtime(edge_path: Path | None) -> list[Check]:
         checks.append(Check(
             "edge.present", "Browser runtime found", Verdict.FAIL, critical=True,
             detail="Microsoft Edge was not found at any expected location.",
-            evidence=f"searched={[str(p) for p in config.EDGE_CANDIDATES]}"))
+            evidence=f"searched={[str(p) for p in config.EDGE_CANDIDATES]}",
+            evidence_kind=EvidenceKind.LIVE))
         return checks
 
+    # LIVE: config.find_edge() stat'd this path during this pass.
     checks.append(Check(
         "edge.present", "Browser runtime found", Verdict.PASS, critical=True,
-        detail=f"Microsoft Edge at {edge_path}", evidence=str(edge_path)))
+        detail=f"Microsoft Edge at {edge_path}", evidence=str(edge_path),
+        evidence_kind=EvidenceKind.LIVE))
 
     # The path is one of bruhswer's own constants, already confirmed to exist, so
     # nothing external reaches this query.
-    raw = sysquery.authenticode(str(edge_path))
+    probe = sysquery.authenticode(str(edge_path))
+    raw = probe.value
     if not isinstance(raw, dict):
         checks.append(Check(
             "edge.signature", "Browser is signed by Microsoft", Verdict.UNKNOWN,
-            critical=True, detail="Could not read the Authenticode signature.",
-            evidence="signature query returned nothing"))
+            critical=True,
+            detail=("bruhswer could not read the browser's Authenticode signature, so "
+                    "it cannot confirm the program it is about to launch is the one "
+                    "Microsoft shipped."),
+            evidence=probe.reason(),
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=(reason_for_probe(probe.status) if not probe.ok
+                            else UnknownReason.MALFORMED_OUTPUT)))
         return checks
 
     status = str(raw.get("Status", ""))
@@ -87,7 +98,8 @@ def verify_runtime(edge_path: Path | None) -> list[Check]:
             "edge.signature", "Browser is signed by Microsoft", Verdict.PASS,
             critical=True,
             detail=f"Signature {status}, signed by {config.EDGE_EXPECTED_SUBJECT_CN}.",
-            evidence=f"status={status} subject={subject[:80]}"))
+            evidence=f"status={status} subject={subject[:80]} {probe.reason()}",
+            evidence_kind=EvidenceKind.LIVE))
         return checks
 
     # NOT trusted. Before calling that a FAIL, distinguish "this binary is wrong" from
@@ -122,13 +134,18 @@ def verify_runtime(edge_path: Path | None) -> list[Check]:
                     "way through updating itself, which briefly leaves the program "
                     "file in this state. Wait a minute and check again. If it does "
                     "not clear, do not use this browser."),
-            evidence=f"status={status} subject={subject[:80]} signs={update_signs}"))
+            evidence=f"status={status} subject={subject[:80]} signs={update_signs}",
+            evidence_kind=EvidenceKind.LIVE,
+            # The signature really was read; it came back inconclusive. That is a
+            # different admission from a query that never completed.
+            unknown_reason=UnknownReason.MALFORMED_OUTPUT))
         return checks
 
     checks.append(Check(
         "edge.signature", "Browser is signed by Microsoft", Verdict.FAIL, critical=True,
         detail=f"Signature status {status!r}; expected a valid Microsoft signature.",
-        evidence=f"status={status} subject={subject[:80]} signs=none"))
+        evidence=f"status={status} subject={subject[:80]} signs=none",
+        evidence_kind=EvidenceKind.LIVE))
     return checks
 
 

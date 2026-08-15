@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.10.0-F5C518?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.11.0-F5C518?style=flat-square">
   <img alt="status" src="https://img.shields.io/badge/status-research--grade%20beta-F5C518?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-333?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-240%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-308%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -36,7 +36,10 @@
 
 bruhswer runs Microsoft Edge inside a set of controls it **verifies before it will let
 the browser start**, and refuses to launch if any of them cannot be proved. (it's a
-wrapper. i know a wrapper sounds bad but hear me out here)
+wrapper. I know a wrapper sounds bad but hear me out here)
+
+Special thanks to claude for helping me with the documentation. 
+I do not know what I could explain it to you without him
 
 |  |  |
 |---|---|
@@ -51,12 +54,13 @@ claims to be any of them.
 ### The whole security model, on one screen
 
 ```
-LAN access from the browser      PASS               measured, program-scoped rule
-Router access from the browser   PASS               measured
-Download quarantine              PASS               measured with a real download
-Disposable session destroyed     PASS               deletion verified, not assumed
-Profile confinement              PASS               ACL applied, then probed
-Browser signature                PASS               Authenticode, every launch
+                                 VERDICT            EVIDENCE
+LAN access from the browser      PASS               earlier measurement + read-back
+Router access from the browser   PASS               earlier measurement + read-back
+Download quarantine              PASS               read-back of the profile setting
+Disposable session destroyed     PASS               measured now, deletion verified
+Profile confinement              PASS               measured now, ACL applied + probed
+Browser signature                PASS               measured now, every launch
 
 Localhost / loopback             NOT ENFORCEABLE    Windows Firewall cannot filter it
 Microsoft account sign-in        NOT ENFORCEABLE    no command-line switch stops it
@@ -68,6 +72,23 @@ Browser 0-day                    OUT OF SCOPE
 Kernel or host compromise        OUT OF SCOPE       bruhswer runs as you
 Anonymity                        OUT OF SCOPE       deliberately, see below
 ```
+
+The **EVIDENCE** column is not decoration, and bruhswer shows the same thing next to
+every verdict in its own UI. A `PASS` answers *did the check succeed*; it does not
+answer *how does bruhswer know*, and those come apart:
+
+| Evidence | What it means | What it does **not** mean |
+|---|---|---|
+| **measured now** | bruhswer observed the property itself, during this check | (nothing; this is the strongest kind) |
+| **read-back** | it read a setting back from Windows or the profile, just now | that the setting is being enforced |
+| **earlier measurement** | a Stage 4 experiment established it once, on this hardware | that it was re-run this session |
+| **reasoned** | derived from other facts | that anything was measured |
+
+The firewall rows are the case that forced this. bruhswer reads the rule back live and
+can honestly say it is present, enabled, scoped to the browser and covering every range.
+But *that the rule stops Edge* rests on the gate A16 experiment, which nothing re-runs.
+Both are true; they are different claims, and a single green dot was making the stronger
+one on the weaker one's evidence.
 
 **Profile isolation protects browser state, not host access.** A separate profile means
 your everyday cookies, logins and history are untouched. It is not an OS sandbox and
@@ -93,7 +114,7 @@ the UI says so in the user's face rather than quietly rounding up.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | Measured platform boundaries - the honest part |
-| [`docs/TESTING.md`](docs/TESTING.md) | What the 240 assertions actually prove, and what they can't |
+| [`docs/TESTING.md`](docs/TESTING.md) | What the 308 assertions actually prove, and what they can't |
 | [`docs/SECURITY-TESTING.md`](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [`docs/research/`](docs/research/) | Three isolation backends built, measured and rejected. History, not guidance |
 
@@ -145,7 +166,7 @@ Everything below is **measured on real hardware**, not inferred from documentati
 | 🔒 | **Fail-closed startup** - no browser if critical checks don't pass. No "continue anyway" button. | Verified |
 | 🚧 | **Router and LAN blocked** - a program-scoped Windows Firewall rule. Internet keeps working. | Measured |
 | 🛡️ | **Browser can't undo it** - an unelevated Edge process could not create, delete or disable the configured firewall rules under the tested configuration. | Measured |
-| 📦 | **Download quarantine** - files land in bruhswer's folder, never your Downloads. Nothing is executed. | Measured |
+| 📦 | **Download quarantine** - the profile's download folder is set to bruhswer's quarantine and read back on every check. Nothing is executed. | Read-back; landing measured once with a real download |
 | 🗑️ | **Disposable sessions** - fresh profile, destroyed on close, downloads included, deletion verified. ([one caveat](#-edge-signs-itself-in-and-bruhswer-cannot-stop-it)) | Verified |
 | 🕵️ | **Privacy settings** - written into the profile and **read back** to confirm they stuck. | Verified |
 | 🏠 | **Host Guard** - tells you what other devices on the Wi-Fi can reach on *your* PC. | Verified |
@@ -410,7 +431,7 @@ recorded rollback.
 <table>
 <tr><td>
 
-**240** assertions across **13** suites, all passing, run twice with identical
+**308** assertions across **17** suites, all passing, run twice with identical
 results, zero known flaky tests. Against a real browser, a real firewall and a real network - not mocks.
 
 </td></tr>

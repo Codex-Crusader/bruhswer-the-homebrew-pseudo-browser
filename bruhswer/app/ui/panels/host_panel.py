@@ -1,4 +1,7 @@
-"""Host Guard - what other devices on this network can reach. Shows fixes, applies none."""
+"""Host Guard - what other devices on this network can reach.
+
+Shows fixes; applies none.
+"""
 
 from __future__ import annotations
 

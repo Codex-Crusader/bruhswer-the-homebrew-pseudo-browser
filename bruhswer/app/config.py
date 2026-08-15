@@ -31,6 +31,43 @@ WARN_AMBER = "#D29922"
 BAD_RED = "#F85149"
 OFF_GREY = "#6E7681"
 
+# High-contrast palette, applied by apply_high_contrast() when Windows says the user
+# has that mode on. Every colour here was chosen to clear WCAG AA (4.5:1) against the
+# black background, which the ordinary palette's amber and green do not - and a status
+# light nobody can read is the same defect as one that lies.
+# tests/test_accessibility.py computes the ratios rather than trusting this comment.
+_HIGH_CONTRAST = {
+    "BG_DARK": "#000000",
+    "BG_PANEL": "#000000",
+    "BG_RAISED": "#1A1A1A",
+    "BRAND_WHITE": "#FFFFFF",
+    "BRAND_YELLOW": "#FFFF00",
+    "FG_DIM": "#D9D9D9",
+    "OK_GREEN": "#4AE04A",
+    "WARN_AMBER": "#FFC93C",
+    "BAD_RED": "#FF6B6B",
+    "OFF_GREY": "#B0B0B0",
+}
+
+
+def apply_high_contrast() -> None:
+    """Switch the palette to the high-contrast one. Call BEFORE any widget is built.
+
+    Rebinds the module globals rather than threading a theme object through every
+    widget: each colour is read once, at widget-construction time, so doing this first
+    is sufficient and touches no call site. It is one-way - bruhswer does not follow a
+    theme change mid-session, and it does not claim to.
+    """
+    globals().update(_HIGH_CONTRAST)
+    globals()["POLICY_STATE_COLOUR"] = {
+        "ALLOWED": _HIGH_CONTRAST["FG_DIM"],
+        "BLOCKED": _HIGH_CONTRAST["OK_GREEN"],
+        "RULE SET, EFFECT NOT MEASURED": _HIGH_CONTRAST["WARN_AMBER"],
+        "NOT ENFORCEABLE": _HIGH_CONTRAST["WARN_AMBER"],
+    }
+    globals()["POLICY_STATE_UNKNOWN_COLOUR"] = _HIGH_CONTRAST["BAD_RED"]
+
+
 # Colour for each network_guard.PolicyState, by the state's VALUE so this module does
 # not have to import the network layer.
 #
@@ -55,6 +92,53 @@ POLICY_STATE_COLOUR = {
 # unreviewed claim; green would be the defect this project exists to avoid.
 POLICY_STATE_UNKNOWN_COLOUR = BAD_RED
 POLICY_STATE_UNKNOWN_LABEL = "UNRECOGNISED POLICY STATE"
+
+# Shapes for the status lights, so a verdict is never carried by colour alone. A
+# red-green colour blindness affects roughly 1 in 12 men, and this product's entire
+# output is a row of coloured dots - PASS and FAIL rendering as the same shape means
+# the security state is unreadable to them. chrome.SHAPE covers the three verdicts;
+# these two are for the rows that are not verdicts at all.
+SHAPE_UNKNOWN = "○"
+SHAPE_LIMITATION = "▬"
+
+# Light palette, applied when Windows says the user prefers light apps. bruhswer is
+# dark by default and that is a deliberate look, but a fixed dark window on a machine
+# set to light is the app ignoring a stated preference.
+#
+# Same bar as the high-contrast palette, and tests/test_accessibility.py measures it:
+# indicators clear 3:1 and text clears 4.5:1 against the light background. The verdict
+# hues are DARKENED rather than reused - the dark theme's #3FB950 green is only 1.9:1
+# on white, so keeping it would have made the status lights unreadable.
+_LIGHT = {
+    "BG_DARK": "#F5F6F7",
+    "BG_PANEL": "#E8EAEC",
+    "BG_RAISED": "#DCDFE3",
+    "BRAND_WHITE": "#16191C",
+    "BRAND_YELLOW": "#7A5B00",
+    "FG_DIM": "#55606B",
+    "OK_GREEN": "#116329",
+    "WARN_AMBER": "#7A4E00",
+    "BAD_RED": "#B01B12",
+    "OFF_GREY": "#5B646D",
+}
+
+
+def apply_light() -> None:
+    """Switch to the light palette. Call BEFORE any widget is built.
+
+    Same one-way rebinding as apply_high_contrast(), for the same reason: each colour
+    is read once at widget-construction time. bruhswer does not follow a theme change
+    mid-session and does not claim to.
+    """
+    globals().update(_LIGHT)
+    globals()["POLICY_STATE_COLOUR"] = {
+        "ALLOWED": _LIGHT["FG_DIM"],
+        "BLOCKED": _LIGHT["OK_GREEN"],
+        "RULE SET, EFFECT NOT MEASURED": _LIGHT["WARN_AMBER"],
+        "NOT ENFORCEABLE": _LIGHT["WARN_AMBER"],
+    }
+    globals()["POLICY_STATE_UNKNOWN_COLOUR"] = _LIGHT["BAD_RED"]
+
 
 # --- paths ---------------------------------------------------------------------
 # All BRUHWSER state lives under one directory. Nothing is written anywhere else.
@@ -105,13 +189,18 @@ ICACLS = SYSTEM32 / "icacls.exe"
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 # --- runtime re-verification ----------------------------------------------------
-# A full verification starts 15 helper processes (14 PowerShell + 1 icacls).
+# A full verification starts 14 helper processes (13 PowerShell + 1 icacls).
 #
-# MEASURED, not estimated: one complete pass took 8.31 SECONDS on this machine and
-# produced 30 checks. That is the number that settles the design - a Tk `after()`
-# callback doing this would freeze the window for eight seconds, once a minute, for
-# the life of the session. It runs on a worker thread and never on the Tk thread.
-# See app/ui/verify_worker.py.
+# MEASURED, not estimated, and RE-MEASURED after HostGuard's seven queries were made
+# concurrent and the duplicate IPv6 probe removed: one complete pass now takes 5.5
+# SECONDS on this machine and produces 31 checks. It was 8.31s across 15 processes.
+#
+# That is still the number that settles the design - a Tk `after()` callback doing this
+# would freeze the window for five seconds, once a minute, for the life of the session.
+# It runs on a worker thread and never on the Tk thread. See app/ui/verify_worker.py.
+#
+# Re-measure with verifier.VerificationResult.total_ms if the guards change again;
+# tests/test_evidence_model.py asserts the timings are collected, not what they are.
 #
 # 60s between cycles: long enough that the helper processes are a rounding error on
 # battery and CPU, short enough that a control which silently stopped applying is
@@ -130,6 +219,18 @@ VERIFY_JOIN_TIMEOUT_SECONDS = 2.0
 # Slice the worker sleeps in while waiting out VERIFY_INTERVAL_SECONDS, so a newly
 # submitted request is picked up promptly instead of waiting out the whole cycle.
 VERIFY_WAKE_POLL_SECONDS = 0.25
+
+# --- hosting the browser window -------------------------------------------------
+# After reparenting Edge, bruhswer resizes it to the stage and then CONFIRMS the resize
+# landed (embed.is_fitted) before dropping the curtain. This replaced fixed 200/900/950ms
+# timers, which were a guess at how long Chromium takes: too short and the user watched
+# the page repaint, too long and startup felt slow for no reason.
+#
+# Three attempts, because the check is a verification and not a wait - if the window is
+# not the right size after three resize-and-confirm rounds, something is wrong that more
+# rounds will not fix, and the curtain must come up anyway rather than hang.
+FIT_MAX_ATTEMPTS = 3
+FIT_RETRY_MS = 120
 
 # --- disposable session overwrite -----------------------------------------------
 # Before a disposable profile is deleted, its files are overwritten with random bytes.

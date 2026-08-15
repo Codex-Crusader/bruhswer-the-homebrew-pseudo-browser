@@ -14,6 +14,21 @@ COLOUR = {Verdict.PASS: config.OK_GREEN,
           Verdict.UNKNOWN: config.WARN_AMBER}
 WORD = {Verdict.PASS: "OK", Verdict.FAIL: "EXPOSED", Verdict.UNKNOWN: "UNKNOWN"}
 
+# Colour AND a word for every verdict, so the state survives being read by someone who
+# cannot separate the colours. A dot alone carries the whole meaning in hue.
+SHAPE = {Verdict.PASS: "●", Verdict.FAIL: "■", Verdict.UNKNOWN: "▲"}
+NOT_ENFORCEABLE_SHAPE = "▬"
+
+
+def check_line(parent: tk.Misc, check) -> None:
+    """One check, with its verdict AND the kind of evidence behind it."""
+    if not check.enforceable:
+        line(parent, check.title, "NOT ENFORCEABLE", config.WARN_AMBER, check.detail,
+             shape=NOT_ENFORCEABLE_SHAPE, note_prefix=check.evidence_note())
+        return
+    line(parent, check.title, WORD[check.verdict], COLOUR[check.verdict], check.detail,
+         shape=SHAPE[check.verdict], note_prefix=check.evidence_note())
+
 
 def scroll_panel(root: tk.Misc, title: str, width: int = 640,
                  height: int = 620) -> tk.Frame:
@@ -41,15 +56,19 @@ def heading(parent: tk.Misc, text: str) -> None:
         fill="x", padx=16, pady=(14, 5))
 
 
-def line(parent: tk.Misc, label: str, value: str, colour: str, note: str = "") -> None:
+def line(parent: tk.Misc, label: str, value: str, colour: str, note: str = "",
+         shape: str = "●", note_prefix: str = "") -> None:
     row = tk.Frame(parent, bg=config.BG_DARK)
     row.pack(fill="x", padx=16, pady=1)
-    tk.Label(row, text="●", font=("Segoe UI", 10), bg=config.BG_DARK,
+    tk.Label(row, text=shape, font=("Segoe UI", 10), bg=config.BG_DARK,
              fg=colour).pack(side="left", padx=(0, 7))
     tk.Label(row, text=label, font=("Segoe UI", 10), width=34, anchor="w",
              bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
     tk.Label(row, text=value, font=("Consolas", 9), anchor="w",
              bg=config.BG_DARK, fg=colour).pack(side="left")
+    if note_prefix:
+        tk.Label(row, text=f"({note_prefix})", font=("Segoe UI", 8), anchor="w",
+                 bg=config.BG_DARK, fg=config.FG_DIM).pack(side="left", padx=(8, 0))
     if note:
         tk.Label(parent, text=note, font=("Segoe UI", 8), justify="left",
                  wraplength=560, anchor="w", bg=config.BG_DARK,

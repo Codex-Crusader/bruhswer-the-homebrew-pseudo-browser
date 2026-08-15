@@ -50,7 +50,7 @@ from pathlib import Path
 
 from .. import config
 from ..logging_setup import get_logger
-from ..verdict import Check, Verdict
+from ..verdict import Check, EvidenceKind, UnknownReason, Verdict
 
 _log = get_logger("integrity")
 
@@ -264,7 +264,10 @@ _TITLE = "Installed files match their manifest"
 
 
 def verify() -> list[Check]:
-    """The `controller.integrity` check. Non-critical, by design - see module docstring."""
+    """The `controller.integrity` check.
+
+    Non-critical by design - see the module docstring.
+    """
     report = check_tree()
 
     if not report.manifest_present:
@@ -273,7 +276,9 @@ def verify() -> list[Check]:
             detail=("No file manifest shipped beside this copy of bruhswer, so its "
                     "files were not compared against anything. This is normal when "
                     "running from a source checkout."),
-            evidence=f"manifest_path={MANIFEST_PATH} present=False")]
+            evidence=f"manifest_path={MANIFEST_PATH} present=False",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.NOT_APPLICABLE)]
 
     if report.inconclusive:
         return [Check(
@@ -284,7 +289,9 @@ def verify() -> list[Check]:
                     f"{', '.join(report.unreadable[:3])}"
                     + (" ..." if len(report.unreadable) > 3 else "") + "."),
             evidence=f"total={report.total} matched={report.matched} "
-                     f"unreadable={report.unreadable[:5]}")]
+                     f"unreadable={report.unreadable[:5]}",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.PARTIAL_EVIDENCE)]
 
     if report.ok:
         return [Check(
@@ -294,7 +301,8 @@ def verify() -> list[Check]:
                     f"detects damage and incomplete updates. It does NOT protect "
                     f"against anyone able to modify this installation, who could "
                     f"change the manifest and this check with it."),
-            evidence=f"total={report.total} matched={report.matched}")]
+            evidence=f"total={report.total} matched={report.matched}",
+            evidence_kind=EvidenceKind.LIVE)]
 
     parts = []
     if report.changed:
@@ -319,4 +327,5 @@ def verify() -> list[Check]:
         evidence=f"total={report.total} matched={report.matched} "
                  f"changed={report.changed[:5]} missing={report.missing[:5]} "
                  f"unexpected={report.unexpected[:5]} "
-                 f"unreadable={report.unreadable[:5]}")]
+                 f"unreadable={report.unreadable[:5]}",
+        evidence_kind=EvidenceKind.LIVE)]
