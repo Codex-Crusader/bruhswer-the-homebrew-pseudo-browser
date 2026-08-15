@@ -125,13 +125,42 @@ them. Verified afterwards by cross-referencing every finding against every marke
 
 ```
 [x] File manifest regenerated and verifies      43/43 match
-[ ] Installer builds                            NOT DONE this release
+[x] File manifest verified against a real fresh clone (LF checkout)   43/43 match
+[x] Installer builds                            ISCC.exe installer\bruhswer.iss
+[x] Installer version matches the release       see the correction below
+[x] Installer contents reviewed                 app/ recursed, __pycache__ and *.pyc
+                                                excluded; no tests, no .venv, no
+                                                profiles, no logs
+[x] Installer and SHA256SUMS.txt published on the release
 [ ] Clean install tested                        NOT DONE - see below
 [ ] Launch from Start Menu / Desktop shortcut   NOT DONE
 [ ] Prerequisite refusals fire correctly        NOT DONE - needs a clean Windows image.
                                                 Unverified since 0.9.1.
 [ ] Uninstall tested                            NOT DONE
 [ ] pip wheel . does not silently produce a broken artifact   NOT DONE
+```
+
+### Correction: the release was published without a download
+
+The tag and the GitHub release went up with **no assets at all**. Every previous release
+shipped `bruhswer-<version>-setup.exe` and `SHA256SUMS.txt`; this one initially shipped
+nothing, so the release page offered no way to install the thing it announced. It was
+noticed by a reader asking where the download was, not by this checklist.
+
+Two causes, both recorded rather than quietly fixed:
+
+1. The version bump updated `pyproject.toml` and the README badge but **missed
+   `installer/bruhswer.iss`**, which still read `0.10.0`. Building without noticing
+   would have produced `bruhswer-0.10.0-setup.exe` for the 0.11.0 tag.
+2. "Installer builds" was written as `NOT DONE` in this checklist and then the release
+   was published anyway. An unticked box is supposed to stop a release or be justified;
+   this one did neither.
+
+Both are fixed: the `.iss` reads `0.11.0`, the installer is built and uploaded, and its
+SHA-256 is published beside it.
+
+```
+868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2  bruhswer-0.11.0-setup.exe
 ```
 
 **Why the install boxes are not ticked, again.** `tools/verify_install.py` performs them
