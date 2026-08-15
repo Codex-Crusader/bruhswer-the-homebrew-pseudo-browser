@@ -207,12 +207,81 @@ which stays true across a resize.
 
 ---
 
+## The installer, and three things found by shipping it
+
+This release was first published with **no installer at all**. Every previous release
+shipped one; this one shipped an empty release page. Building it then surfaced three
+further defects, each recorded in `docs/releases/CHECKLIST-0.11.0.md` rather than
+quietly fixed.
+
+### A silent uninstall deleted browsing data without asking
+
+The uninstaller offers a Yes/No prompt before removing your profile, quarantine and
+logs, with `MB_DEFBUTTON2` so **No** is the focused button. The assumption was that
+`/SUPPRESSMSGBOXES` would therefore answer No. It does not: it answers **Yes**, and
+`MB_DEFBUTTON2` only sets what a human sees highlighted. A silent uninstall destroyed a
+real 110 MB profile during this release's own verification.
+
+`CurUninstallStepChanged` now returns early when `UninstallSilent` is true. Silent means
+nobody was asked, and *nobody was asked* must not resolve to *yes, delete it* for the one
+action here that cannot be undone. An interactive uninstall still offers the choice.
+
+### The check that was supposed to catch that reported PASS
+
+```
+[PASS] user data left alone, not silently deleted
+```
+
+printed at the moment the data was being deleted. It asserted `USER_DATA.exists()` - and
+the uninstaller deliberately keeps `state\` so the Host Guard rollback record survives,
+so the root directory always exists afterwards. **The assertion could never fail.**
+
+It now takes a per-folder census of file counts and bytes before the install and compares
+after the uninstall. `logs/` is asserted not to *shrink* rather than to be identical,
+since the verification runs the installed copy and it writes a log. `verify_install.py`
+also backs the real user data up before it risks it, and keeps the backup.
+
+### The uninstaller's cleanup advice pointed at files it had just deleted
+
+bruhswer's firewall rules and any Host Guard change are system-wide and outlive the
+uninstall by design, because removing them needs Administrator and this installer never
+asks for it. The old message had three problems: it **guessed** ("If you applied
+bruhswer's network policy"), it named `bruhswer-netpolicy.ps1` which ships under the
+install folder and is **deleted with everything else**, and it offered no way to act.
+
+Now it checks with a read-only `netsh` query, says nothing when there is nothing to say,
+copies both scripts plus a written guide to `%LOCALAPPDATA%\BRUHWSER\cleanup\` before the
+files go, and **offers to remove the rules through a normal UAC prompt** - then re-checks
+whether they are actually gone rather than reporting success for having asked. It still
+never elevates itself.
+
+The kit is written even on a silent uninstall: saving a file is not a dialog, and a
+scripted uninstall leaving no instructions is the same defect without a human present.
+
+### Install verification
+
+`tools/verify_install.py` now reports **32/32**, and the install-time file-manifest check
+added in 0.10.0 **executed against a built installer for the first time**:
+
+```
+[PASS] installed files match the shipped manifest  -  OK 43 43 () () ()
+```
+
+The installer asset was replaced twice on this tag. All three hashes are in the
+checklist, because a replaced asset invalidates any checksum already recorded and doing
+it twice does not make it acceptable to present the last one as though it were the first.
+
+---
+
 ## Known gaps, stated rather than implied
 
-- The install checklist boxes are still not ticked. `tools/verify_install.py` refuses to
-  run against an existing installation, so the install-time manifest check added in
-  0.10.0 has **still never executed against a built installer**.
+- **Nothing clicks the shortcuts.** The Start Menu and Desktop shortcuts are asserted to
+  be created and removed; launching bruhswer from one is not tested.
+- **Prerequisite refusals remain unverified.** They need a Windows image with no Python
+  and no Edge, and have been unverified since 0.9.1.
 - Screenshots are further behind the build than they were: the UI gained shapes, an
   evidence column, a regression banner and a quarantine count this release.
 - IPv6 rule effectiveness remains `NEVER_MEASURED`. Nothing changed there.
 - DNS encryption remains `UNKNOWN` for the same reason as every previous release.
+- The full suite was stressed 10x on the eleven browser-free suites only (10/10 clean).
+  The six browser suites were run twice, not ten times.
