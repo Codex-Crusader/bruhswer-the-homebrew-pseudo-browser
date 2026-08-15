@@ -166,8 +166,18 @@ Two causes, both recorded rather than quietly fixed:
 Both are fixed: the `.iss` reads `0.11.0`, the installer is built and uploaded, and its
 SHA-256 is published beside it.
 
+The first uploaded build was then REPLACED, and that is not something this project does
+lightly - the v0.9.0 note in `bruhswer.iss` exists because re-uploading a different file
+under a published tag silently invalidates a checksum somebody may already have recorded.
+
+It was replaced because the first build's uninstaller destroys browsing data on a silent
+uninstall (see below). Leaving it up would have meant knowingly publishing an installer
+whose uninstall deletes a user's profile without asking. The window was roughly thirty
+minutes on a release that had not been announced anywhere.
+
 ```
-868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2  bruhswer-0.11.0-setup.exe
+first build, withdrawn:  868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2
+published build:         3441984C7FEFD4F65515F420432E3EB1B8DC79D54A9AE33B729DB8A10E007DCF
 ```
 
 ### The install boxes, and the data loss that ticking them caused
