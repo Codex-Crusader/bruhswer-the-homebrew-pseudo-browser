@@ -75,6 +75,24 @@ def _data_census() -> dict[str, tuple[int, int]]:
     return out
 
 
+def _system_changes_present() -> bool:
+    """Does this PC still carry a bruhswer change that outlives the uninstall?
+
+    The same two things the uninstaller looks for: its firewall rules, and a Host Guard
+    rollback record. Checked from here independently, so step 9 is asserting against
+    the machine rather than trusting the uninstaller's own opinion of it.
+    """
+    if (USER_DATA / "state" / "hostguard-rollback.json").is_file():
+        return True
+    probe = subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "netsh.exe"),
+         "advfirewall", "firewall", "show", "rule",
+         "name=BRUHWSER-edge-deny-ipv4-private"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, shell=False)
+    return probe.returncode == 0
+
+
 def _backup_user_data() -> Path | None:
     """Copy the user's bruhswer data aside before anything destructive runs.
 
@@ -226,6 +244,32 @@ def main(setup: Path) -> int:
     check("logs/ not deleted (may grow; the installed app ran)",
           now_logs[0] >= was_logs[0] and now_logs[1] >= was_logs[1],
           f"before={was_logs} after={now_logs}")
+
+    print("\n9. Cleanup instructions for the system-wide changes")
+    # The firewall rules and any Host Guard change OUTLIVE the uninstall, and the
+    # scripts that undo them ship under the install folder, which the uninstall
+    # deletes. So the uninstaller copies them somewhere that survives. If it stops
+    # doing that, the advice it prints points at files that are gone - which is what it
+    # did before 0.11.0, and the kind of thing nobody notices until they follow it.
+    expect_kit = _system_changes_present()
+    kit = USER_DATA / "cleanup"
+    if not expect_kit:
+        check("no cleanup kit needed (no system-wide changes found)", True)
+    else:
+        check("cleanup kit written where the uninstall cannot remove it",
+              kit.is_dir(), str(kit))
+        for name in ("HOW-TO-CLEAN-UP.txt", "bruhswer-netpolicy.ps1",
+                     "bruhswer-hostguard.ps1"):
+            check(f"  {name} present", (kit / name).is_file())
+        guide = kit / "HOW-TO-CLEAN-UP.txt"
+        if guide.is_file():
+            text = guide.read_text(encoding="utf-8", errors="replace")
+            # The whole point is that the paths RESOLVE. A guide naming a script that
+            # is not beside it is the defect, not the fix.
+            check("  guide names only scripts that are actually there",
+                  all((kit / s).is_file() for s in
+                      ("bruhswer-netpolicy.ps1", "bruhswer-hostguard.ps1")
+                      if s in text))
 
     print("\n" + "=" * 66)
     failed = len(_results) - sum(_results)

@@ -176,9 +176,45 @@ whose uninstall deletes a user's profile without asking. The window was roughly 
 minutes on a release that had not been announced anywhere.
 
 ```
-first build, withdrawn:  868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2
-published build:         3441984C7FEFD4F65515F420432E3EB1B8DC79D54A9AE33B729DB8A10E007DCF
+first build, withdrawn:   868121E311B5DFE3E31297F2C9435C502AFD2EA6B1ABFFA91BDF86C84EC34FB2
+second build, withdrawn:  3441984C7FEFD4F65515F420432E3EB1B8DC79D54A9AE33B729DB8A10E007DCF
+published build:          21CD5D25478D34219800ACE10CF98E64D82F01C7BB52CD1FC7D8A4F4FE73C890
 ```
+
+The second build was withdrawn for the uninstall cleanup work below, on the same
+unannounced release. Three hashes are recorded rather than one because a replaced asset
+invalidates any checksum already taken, and the honest response to doing that twice is
+to write down all three, not to present the last one as though it were the first.
+
+### The uninstaller now tells you how to leave the machine clean
+
+bruhswer's firewall rules and any Host Guard change are system-wide and survive the
+uninstall by design - removing them needs Administrator, which this installer never
+asks for. How that was communicated had three defects:
+
+1. **It guessed.** The warning opened "If you applied bruhswer's network policy", which
+   the uninstaller never checked. Everyone got the same paragraph whether it applied to
+   them or not, which is how a warning stops being read. It now runs a read-only `netsh`
+   query and looks for the Host Guard rollback record, and says nothing at all when
+   there is nothing to say.
+2. **It pointed at files it was about to delete.** The instruction was to run
+   `bruhswer-netpolicy.ps1`, which ships under the install folder and is removed with
+   everything else - so following that advice after uninstalling found no such file. The
+   hostguard revert advice had the same problem. Both scripts, plus a written guide, are
+   now copied to `%LOCALAPPDATA%\BRUHWSER\cleanup\` before the files go, and every
+   message gives the full path.
+3. **It offered no way out.** "Open an Administrator PowerShell and type this" is a wall
+   for most people, and the cost of not clearing it is Edge silently unable to reach the
+   LAN forever. The uninstaller now offers to do it, through a normal UAC prompt, and
+   then RE-CHECKS whether the rules are gone rather than reporting success for having
+   asked. It still never elevates itself.
+
+The kit is written even on a silent uninstall. Saving a file is not a dialog, and a
+scripted uninstall leaving no instructions is the same dangling-advice defect reached
+without a human present. Only the interactive offer is skipped.
+
+`verify_install.py` step 9 asserts all of it, including that the guide names only
+scripts that are actually beside it. **32/32.**
 
 ### The install boxes, and the data loss that ticking them caused
 

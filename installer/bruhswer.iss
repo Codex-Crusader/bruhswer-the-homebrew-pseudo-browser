@@ -395,6 +395,11 @@ end;
 
 { The user's browsing data is NOT removed silently. It is a separate, explicit
   question that defaults to keeping the data, and it says exactly what would go. }
+function CleanupKitPath(): String;
+begin
+  Result := ExpandConstant('{localappdata}') + '\BRUHWSER\cleanup';
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
@@ -460,34 +465,206 @@ begin
              + #13#10 + '    ' + DataDir + '\state'
              + #13#10#13#10
              + 'It holds the record of any change Host Guard made to this PC''s '
-             + 'firewall or SMB settings, and it is the only way to undo them. '
-             + 'Run this before deleting it:'
+             + 'firewall or SMB settings, and it is the only way to undo them.'
              + #13#10#13#10
-             + '    bruhswer-hostguard.ps1 -Action revert',
+             + 'The script that reads it, and written instructions, are at:'
+             + #13#10 + '    ' + CleanupKitPath()
+             + #13#10#13#10
+             + 'Run this from there, as Administrator, before deleting anything:'
+             + #13#10#13#10
+             + '    .\bruhswer-hostguard.ps1 -Action revert',
              mbInformation, MB_OK);
   end;
 end;
 
-{ bruhswer's firewall rules outlive the application on purpose, so the user is told
-  they are there. Removing them needs Administrator, and this uninstaller does not
-  have it and does not ask for it. }
+{ --- leaving the machine clean -------------------------------------------------
+
+  bruhswer's firewall rules and any Host Guard change outlive the application. Three
+  things were wrong with how that used to be handled, and all three are fixed here.
+
+  1. IT GUESSED. The old warning opened "If you applied bruhswer's network policy",
+     which the uninstaller never checked. Every user got the same paragraph whether
+     they had rules or not, so the ones who did had no way to tell it applied to them.
+     Reading firewall rules needs no Administrator, so it now looks.
+
+  2. IT POINTED AT A FILE IT WAS ABOUT TO DELETE. The instruction was to run
+     bruhswer-netpolicy.ps1, which ships under the install folder and is removed with
+     everything else. Anyone following that advice AFTER uninstalling found no such
+     file, and the same was true of the hostguard revert advice. The scripts are now
+     copied somewhere that survives, and the message gives the full path.
+
+  3. IT OFFERED NO WAY OUT. "Open an Administrator PowerShell and type this" is a wall
+     for most people, and the cost of not doing it is Edge silently unable to reach the
+     LAN forever. The uninstaller now offers to do it, via a normal UAC prompt. It still
+     does not elevate itself or act without being asked - the user clicks Yes on a
+     dialog Windows draws, which is consent, not a bypass. }
+
+function NetPolicyApplied(): Boolean;
+var
+  Code: Integer;
+begin
+  { netsh exits non-zero when no rule matches the name. Read-only, no elevation. }
+  Result := Exec(ExpandConstant('{sys}\netsh.exe'),
+                 'advfirewall firewall show rule name="BRUHWSER-edge-deny-ipv4-private"',
+                 '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+function HostGuardChanged(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{localappdata}')
+                       + '\BRUHWSER\state\hostguard-rollback.json');
+end;
+
+{ Copy the elevated one-shots somewhere the uninstall does not touch, with a written
+  guide beside them. Returns the folder, or '' if nothing could be copied. }
+function WriteCleanupKit(Guide: String): String;
+var
+  Dest, Tools: String;
+  Copied: Boolean;
+begin
+  Dest := CleanupKitPath();
+  Tools := ExpandConstant('{app}') + '\bruhswer\tools\';
+  if not ForceDirectories(Dest) then
+  begin
+    Result := '';
+    exit;
+  end;
+  Copied := CopyFile(Tools + 'bruhswer-netpolicy.ps1',
+                     Dest + '\bruhswer-netpolicy.ps1', False);
+  if CopyFile(Tools + 'bruhswer-hostguard.ps1',
+              Dest + '\bruhswer-hostguard.ps1', False) then
+    Copied := True;
+  if not SaveStringToFile(Dest + '\HOW-TO-CLEAN-UP.txt', Guide, False) then
+    if not Copied then
+    begin
+      Result := '';
+      exit;
+    end;
+  Result := Dest;
+end;
+
+function CleanupGuide(Net, Host: Boolean): String;
+var
+  S: String;
+begin
+  S := 'Removing the changes bruhswer made to this PC' + #13#10
+     + '=============================================' + #13#10#13#10
+     + 'bruhswer itself has been uninstalled. These changes are system-wide, so they'
+     + #13#10 + 'were left in place rather than removed silently. Each one needs'
+     + #13#10 + 'Administrator, which is why they are not done for you.' + #13#10#13#10
+     + 'Open PowerShell as Administrator, cd to this folder, and run what applies.'
+     + #13#10#13#10;
+  if Net then
+    S := S + '1. FIREWALL RULES  (found on this PC)' + #13#10
+       + '   Two rules named BRUHWSER-edge-* stop Microsoft Edge reaching your router'
+       + #13#10 + '   and other devices on your network. Edge still reaches the'
+       + #13#10 + '   internet. Nothing else is affected - the rules name msedge.exe'
+       + #13#10 + '   only. If you leave them, Edge stays blocked on your LAN with'
+       + #13#10 + '   nothing left on the PC to explain why.' + #13#10#13#10
+       + '       .\bruhswer-netpolicy.ps1 -Action remove' + #13#10#13#10;
+  if Host then
+    S := S + '2. HOST GUARD CHANGES  (a rollback record was found)' + #13#10
+       + '   Host Guard may have turned off File and Printer Sharing on Public'
+       + #13#10 + '   networks and required SMB signing. Both make this PC safer, so'
+       + #13#10 + '   keeping them is reasonable. Revert only if you want the original'
+       + #13#10 + '   settings back.' + #13#10#13#10
+       + '       .\bruhswer-hostguard.ps1 -Action revert' + #13#10#13#10
+       + '   The record it needs is at:' + #13#10
+       + '       ' + ExpandConstant('{localappdata}')
+       + '\BRUHWSER\state\hostguard-rollback.json' + #13#10
+       + '   Do not delete that file before reverting; it is the only copy of what'
+       + #13#10 + '   the settings were before.' + #13#10#13#10;
+  S := S + 'When you are done you can delete this folder:' + #13#10
+     + '    ' + CleanupKitPath() + #13#10;
+  Result := S;
+end;
+
 function InitializeUninstall(): Boolean;
+var
+  Net, Host: Boolean;
+  Kit, Script: String;
+  Code: Integer;
 begin
   Result := True;
-  MsgBox('Before removing bruhswer:'
-         + #13#10#13#10
-         + 'If you applied bruhswer''s network policy, two Windows Firewall rules '
-         + 'named BRUHWSER-edge-* are still in place. They stop Microsoft Edge '
-         + 'reaching your router and other devices on your network.'
-         + #13#10#13#10
-         + 'THEY WILL SURVIVE THIS UNINSTALL. Leaving them behind means Edge stays '
-         + 'blocked with nothing left on the PC to explain why.'
-         + #13#10#13#10
-         + 'Remove them first, from an Administrator PowerShell:'
-         + #13#10#13#10
-         + '    bruhswer-netpolicy.ps1 -Action remove'
-         + #13#10#13#10
-         + 'This uninstaller will not change your firewall itself - that needs '
-         + 'Administrator, and it is not going to ask you for it.',
-         mbInformation, MB_OK);
+
+  Net := NetPolicyApplied();
+  Host := HostGuardChanged();
+
+  { WRITE THE KIT EVEN WHEN SILENT. A silent uninstall must not pop a dialog at an
+    automated caller, but saving a file is not a dialog - and a scripted uninstall that
+    leaves no instructions behind is the same dangling-advice defect this whole block
+    exists to fix, just reached without a human present. Only the interactive offer is
+    skipped below. }
+  if Net or Host then
+    Kit := WriteCleanupKit(CleanupGuide(Net, Host));
+
+  if UninstallSilent then
+    exit;
+
+  if not (Net or Host) then
+  begin
+    { Nothing was found, so say so. The old code delivered a warning about firewall
+      rules to people who had none, which is how a warning stops being read. }
+    MsgBox('bruhswer made no system-wide changes to remove.'
+           + #13#10#13#10
+           + 'No BRUHWSER firewall rules are present and no Host Guard rollback '
+           + 'record was found, so uninstalling leaves nothing behind.',
+           mbInformation, MB_OK);
+    exit;
+  end;
+
+  if Net then
+  begin
+    if MsgBox('bruhswer changed your firewall, and that change OUTLIVES this uninstall.'
+              + #13#10#13#10
+              + 'Two rules named BRUHWSER-edge-* stop Microsoft Edge reaching your '
+              + 'router and other devices on your network. Edge still reaches the '
+              + 'internet, and no other program is affected.'
+              + #13#10#13#10
+              + 'Leave them and Edge stays blocked on your local network, with '
+              + 'nothing left on this PC to explain why.'
+              + #13#10#13#10
+              + 'Remove them now?'
+              + #13#10#13#10
+              + 'Windows will ask for Administrator. bruhswer does not elevate '
+              + 'itself; you are approving it.',
+              mbConfirmation, MB_YESNO or MB_DEFBUTTON1) = IDYES then
+    begin
+      Script := ExpandConstant('{app}') + '\bruhswer\tools\bruhswer-netpolicy.ps1';
+      if ShellExec('runas', 'powershell.exe',
+                   '-NoProfile -ExecutionPolicy Bypass -File "' + Script
+                   + '" -Action remove',
+                   '', SW_SHOW, ewWaitUntilTerminated, Code) then
+      begin
+        if NetPolicyApplied() then
+          MsgBox('The rules are STILL PRESENT.'
+                 + #13#10#13#10
+                 + 'Removal did not complete - it may have been cancelled at the '
+                 + 'Administrator prompt. The instructions and the script are at:'
+                 + #13#10#13#10 + '    ' + Kit,
+                 mbError, MB_OK)
+        else
+          MsgBox('Firewall rules removed, and verified gone.'
+                 + #13#10#13#10
+                 + 'Edge can reach your local network again.',
+                 mbInformation, MB_OK);
+      end
+      else
+        MsgBox('Could not start the removal - the Administrator prompt was '
+               + 'refused or cancelled.'
+               + #13#10#13#10
+               + 'The script and written instructions are at:'
+               + #13#10#13#10 + '    ' + Kit,
+               mbError, MB_OK);
+    end;
+  end;
+
+  if Kit <> '' then
+    MsgBox('Instructions for anything still left have been saved where the '
+           + 'uninstall cannot remove them:'
+           + #13#10#13#10 + '    ' + Kit + '\HOW-TO-CLEAN-UP.txt'
+           + #13#10#13#10
+           + 'The scripts they refer to are in that folder too, because the copies '
+           + 'under Program Files are about to be deleted with everything else.',
+           mbInformation, MB_OK);
 end;
