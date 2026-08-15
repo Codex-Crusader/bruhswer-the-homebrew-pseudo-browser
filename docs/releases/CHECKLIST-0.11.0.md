@@ -22,9 +22,17 @@ from.** Where something was skipped, the reason is written next to it.
 [x] 10x stress run on the fast suites        10/10 clean, 0 flaky, 5.0 min
 [ ] 10x stress run on the FULL suite         NOT DONE - see below
 [ ] Real-world GUI walkthrough passes        NOT DONE - see below
-[ ] CI green on the release commit           not yet pushed at time of writing
-[ ] CodeQL green, no open alerts             not yet pushed at time of writing
+[x] CI green on the release commit           bb6b403, green on the FIRST run, 36s
+[x] CodeQL green, no open alerts             bb6b403, green, 1m5s
+[x] Manifest verified against a real fresh clone   43/43 match
 ```
+
+CI passed first time on the tagged commit. Recording that because 0.10.0's did not: it
+failed twice on lint, and the fix was to make `lint_report.py` run ruff and to declare
+ruff as a dev extra. That fix is what made the difference here, with two additions this
+release - the local pin now matches the version CI installs, and ruff is actually
+installed in the interpreter `lint_report.py` shells out to, so it reports `ruff: clean`
+instead of `NOT INSTALLED`.
 
 Per-suite counts, from the run:
 
