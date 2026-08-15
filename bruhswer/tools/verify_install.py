@@ -22,6 +22,7 @@ WHAT IT STILL DOES NOT PROVE
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -74,8 +75,42 @@ def _data_census() -> dict[str, tuple[int, int]]:
     return out
 
 
+def _backup_user_data() -> Path | None:
+    """Copy the user's bruhswer data aside before anything destructive runs.
+
+    THIS SCRIPT UNINSTALLS FOR REAL, AGAINST THE REAL %LOCALAPPDATA%\\BRUHWSER.
+    Redirecting the environment does not move it: Inno resolves {localappdata} from the
+    shell folder, not from the variable. So the only place a guard can live is here.
+
+    It is needed because the thing it guards against already happened. During 0.11.0's
+    verification the silent uninstall deleted a 110 MB persistent profile, the
+    quarantine and the logs, and the script reported that user data had been left alone.
+    The uninstaller no longer does that, but a tool that destroys real data when one
+    line of Pascal is wrong should not be relying on that line staying right.
+
+    Returns the backup location, or None if there was nothing to copy.
+    """
+    if not USER_DATA.is_dir() or not any(USER_DATA.iterdir()):
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = Path(os.environ["TEMP"]) / f"bruhswer-userdata-{stamp}"
+    shutil.copytree(USER_DATA, target, dirs_exist_ok=True)
+    files = sum(1 for f in target.rglob("*") if f.is_file())
+    size = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
+    print(f"  backed up {files} file(s), {size / 1024 / 1024:.1f} MB")
+    print(f"  -> {target}")
+    return target
+
+
 def main(setup: Path) -> int:
     print(f"bruhswer install verification\n  artifact: {setup}\n")
+
+    print("0. Protecting the real user data this script is about to risk")
+    backup = _backup_user_data()
+    check("user data backed up, or there was none to back up",
+          backup is not None or not USER_DATA.is_dir()
+          or not any(USER_DATA.iterdir()),
+          str(backup) if backup else "no existing user data")
 
     # BEFORE anything runs. This script installs and then uninstalls, and the uninstall
     # is the step that can destroy a real profile.
@@ -195,6 +230,17 @@ def main(setup: Path) -> int:
     print("\n" + "=" * 66)
     failed = len(_results) - sum(_results)
     print(f"{sum(_results)} passed, {failed} failed")
+
+    if backup is not None:
+        # KEPT, not deleted, and its location printed either way. If step 8 failed then
+        # this copy is the only remaining record of the user's profile, and deleting it
+        # to tidy up would destroy the evidence that the check just caught something.
+        print(f"\nUser data backup kept at:\n  {backup}")
+        if failed:
+            print("Step 8 reported a change. RESTORE FROM THE BACKUP ABOVE before "
+                  "running anything else against this machine.")
+        else:
+            print("Nothing was lost; delete it whenever you like.")
     return 0 if failed == 0 else 1
 
 
