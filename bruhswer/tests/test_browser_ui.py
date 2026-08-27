@@ -261,7 +261,7 @@ def main() -> int:
     facts = tokens.summarise_renderers(renderers)
     check("their tokens were readable", facts["measured"] > 0, str(facts))
     check("every renderer runs at UNTRUSTED integrity",
-          facts["measured"] > 0 and facts["untrusted"] == facts["measured"],
+          0 < facts["measured"] == facts["untrusted"],
           f"{facts['untrusted']}/{facts['measured']} untrusted, "
           f"{facts['appcontainer']} in an AppContainer")
 
@@ -289,8 +289,11 @@ def main() -> int:
 
     print("\n5. Security panel opens and reflects real state")
     win.open_security_panel()
-    pump(win, 3)
-    check("BRUH panel opened", len(win.root.winfo_children()) > 0)
+    # open_security_panel() now runs its pass off the Tk thread (was a synchronous
+    # 5.5s freeze); the panel appears only once that pass reports back, so this waits
+    # for it rather than pumping a fixed, shorter duration.
+    opened = pump_until(win, lambda: len(win.root.winfo_children()) > 0, 15)
+    check("BRUH panel opened", opened)
     check("localhost light is amber, never green",
           win.lights["LOCALHOST"].cget("fg") == config.WARN_AMBER)
     check("VPN light is off, never green",

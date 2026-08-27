@@ -70,6 +70,13 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self._verifier = VerifyWorker()
         self._drain_job: str | None = None
         self._closing = False
+        # One-shot verification (startup, BRUH CHECK) used to be synchronous, which
+        # accidentally serialised repeat clicks by freezing the window for their
+        # duration. Now that it does not freeze the window, a second click while the
+        # first pass is still running must be refused explicitly, or two overlapping
+        # startup() calls can each decide to open a session and race each other's
+        # controller.stop()/start(). See _verify_async.
+        self._verify_in_flight = False
         # check_ids currently named in a regression warning, so the warning can be
         # withdrawn once every one of them verifies again.
         self._warned_ids: set[str] = set()
@@ -409,9 +416,15 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         return chrome.scroll_panel(self.root, title, width, height)
 
     def open_security_panel(self) -> None:
+        """A menu item, not a launch gate - but the same 5.5s pass ran synchronously
+        here too, freezing the whole window on a click nobody expected to block."""
         session = self.controller.snapshot()
-        self.result = self.controller.verify(
-            session.mode if session.active else session_manager.PERSISTENT)
+        mode = session.mode if session.active else session_manager.PERSISTENT
+        self.set_status("Running security verification...")
+        self._verify_async(mode, self._on_security_panel_verified)
+
+    def _on_security_panel_verified(self, result: verifier.VerificationResult) -> None:
+        self.result = result
         self.refresh_lights()
         security_panel.render(self._panel("BRUH CHECK"), self.result)
 

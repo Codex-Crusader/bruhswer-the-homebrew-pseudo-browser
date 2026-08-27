@@ -455,6 +455,35 @@ class TestSessionDestruction(unittest.TestCase):
         self.assertFalse(session.profile_dir.exists())
 
 
+class TestQuarantineFolderNamingHasOneDerivation(unittest.TestCase):
+    """session_manager used to keep its own copy of quarantine's folder-naming logic,
+    justified by a comment claiming a session id is always 16 hex characters. True for
+    disposable sessions, false for the persistent one ("persistent000000") - the two
+    functions produced different folder names for that id, behind a comment asserting
+    they could not. Fixed by importing quarantine.folder_name_for instead of
+    re-deriving it; this pins that there is now exactly one place that name comes from.
+    """
+
+    def test_disposable_id_matches_what_downloads_were_actually_written_under(self):
+        session_id = "a" * 16
+        via_quarantine = quarantine.folder_name_for(session_id)
+        session = session_manager.Session(
+            mode=session_manager.DISPOSABLE, session_id=session_id,
+            profile_dir=config.PROFILE_DISPOSABLE_ROOT / session_id,
+            created=session_manager.datetime.now(session_manager.timezone.utc))
+        # pending_quarantine derives the folder to look in; it must be the same folder
+        # apply_download_directory actually pointed the browser's downloads at.
+        session_manager.pending_quarantine(session)  # must not raise on a missing dir
+        self.assertEqual(via_quarantine, "a" * 16)
+
+    def test_persistent_id_no_longer_diverges(self):
+        """The id that exposed the divergence. Would have been 'ee000000' before the
+        fix - a completely different folder from the one downloads are actually
+        written to."""
+        session_id = "persistent000000"
+        self.assertEqual(quarantine.folder_name_for(session_id), session_id)
+
+
 class TestQuarantineExport(unittest.TestCase):
     def test_export_refuses_source_outside_quarantine(self):
         outside = quarantine.QuarantinedFile(

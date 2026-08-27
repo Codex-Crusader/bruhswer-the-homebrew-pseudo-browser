@@ -1,6 +1,6 @@
 # Architecture
 
-**Status: current.** This describes the code that ships in v0.9.2.
+**Status: current.** This describes the code that ships in v0.11.0.
 
 Earlier designs (WSL2, Hyper-V, QEMU) were built, measured, and rejected. They live in
 [`research/`](research/) as evidence and are not guidance. If you want the story of how
@@ -68,7 +68,12 @@ whether launch is allowed, and never manages a session itself.
 
 | File | Responsibility |
 |---|---|
-| `browser_window.py` | The window: layout, hosting Edge, status lights, the session lifecycle as the user experiences it |
+| `browser_window.py` | Layout, menu actions, panel launchers. Assembles the two mixins below into one `BrowserWindow` class |
+| `window_shell.py` | Declared, never instantiated. The state and cross-mixin methods `session_lifecycle.py` and `verification_ui.py` both call on `self`, so a genuine typo in either is not lost in hundreds of otherwise-unresolvable references |
+| `session_lifecycle.py` | Startup, window hosting (the `SetParent` handshake), teardown - the session lifecycle as the user experiences it |
+| `verification_ui.py` | Status lights, regression warnings, the account banner, the panic indicator, and the re-verification worker's lifecycle |
+| `verify_worker.py` | A background thread that re-runs every check once a minute for as long as a session is open, so the lights describe the live system rather than a launch-time snapshot. Publishes results through a queue; never touches a Tk object itself |
+| `panic_key.py` | Registers the global panic hotkey on its own thread and reports whether it is actually armed |
 | `panels/` | One module per panel - security, network, privacy, host, quarantine. Each renders a guard's output; none computes it |
 | `dialogs.py` | Modal confirmations, e.g. warning before disposable downloads are destroyed |
 | `app_ui.py` | The standalone control panel (`--panel`), usable without a browser |
@@ -127,6 +132,18 @@ downloaded file, or any other browser-controlled input.
 `enforceable=False` renders as `NOT ENFORCEABLE`, never green, and never blocks launch
 - because blocking on a platform limitation would just mean the app never starts.
 
+Every `Check` also declares an `EvidenceKind` - `LIVE` ("measured now"), `READ_BACK`
+("configuration read back; enforcement not observed"), `HISTORICAL` ("earlier
+measurement, not re-run now"), or the weakest, `INFERENCE` ("reasoned, not measured").
+"The check passed" and "how bruhswer knows" are different claims, and a check that
+forgets to declare its kind gets the weakest one by default rather than the strongest -
+a test fails the build if any shipped check is left on that default. Where a `Check`
+reports `UNKNOWN`, an `UnknownReason` says which of several different situations that
+is - a query that failed, an artefact nobody could read, a property no measurement has
+ever established - so "could not measure" and "measured, and it was fine" can never
+collapse into the same result the way they once did
+(`tests/test_overclaim_regressions.py` pins the specific defects this closed).
+
 ---
 
 ## What happens at launch
@@ -135,7 +152,7 @@ downloaded file, or any other browser-controlled input.
 1. ensure_dirs()            everything under %LOCALAPPDATA%\BRUHWSER, nowhere else
 2. sweep_orphans()          remove disposable profiles and quarantines left by a crash
 3. DPI awareness            before any window exists, or Edge renders at the wrong scale
-4. Controller.verify()      every guard runs; ~29 checks
+4. Controller.verify()      every guard runs; 31 checks
         |
         +-- any critical check not PASS?  --> BRUH. NO. No browser. No override.
         |
@@ -145,9 +162,15 @@ downloaded file, or any other browser-controlled input.
 8. verify_all() again       including the download directory, now that it is set
 9. edge.launch(argv)        explicit argv, shell=False, no dangerous flags
 10. embed.host_window()     Edge's window reparented into the frame, input queues joined
+11. VerifyWorker.start()    re-verification begins: every check again, once a minute,
+                            for as long as the session stays open
 ```
 
 Steps 4 and 8 are the reason the app exists. Everything else is plumbing around them.
+Step 11 exists because they are not the only moment a control can stop holding - a
+firewall rule deleted by another admin tool, or an Edge update, does not wait for the
+next launch to happen. The status lights describe step 11's latest pass, not step 4's or
+step 8's, for as long as a session is open.
 
 ---
 
@@ -167,7 +190,7 @@ the rest. A security decision made anywhere else is a bug.
 | `downloads/quarantine.py` | Quarantine paths and export |
 | `config.py`, `verdict.py` | Constants, and the rule that UNKNOWN is not PASS |
 
-**1,789 lines of the application's 4,620.** The remaining 2,831 are UI, window hosting,
+**3,255 lines of the application's 8,716.** The remaining 5,461 are UI, window hosting,
 orchestration and presentation. They can be wrong without a security property being
 wrong, which is the point of keeping the split visible.
 

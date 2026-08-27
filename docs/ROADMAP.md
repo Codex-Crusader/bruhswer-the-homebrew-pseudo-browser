@@ -3,8 +3,9 @@
 What is planned, in rough priority order. Nothing here is promised, and nothing here is
 a claim about the current release - if it is on this page, **it does not exist yet**.
 
-Current release: **v0.9.0**, pre-1.0. What it actually does and does not do is in
-[`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md) and the
+Current release: **v0.11.0**, pre-1.0. What it actually does and does not do is in
+[`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md) (the original 0.9.0 publication pass;
+see `docs/releases/CHECKLIST-0.11.0.md` for what changed since) and the
 [README](../README.md).
 
 ---
@@ -43,21 +44,27 @@ authentication.
 
 ### 2. Clean install / uninstall verification
 
-Partly done. `v0.9.0` was install-tested on a real machine, including a junction
-planted in the install tree to prove the uninstaller does not follow reparse points.
+Mostly done as of 0.11.0. `tools/verify_install.py` now runs the checks that used to be
+manual and reported **26/26** for the 0.11.0 release: install-time file-manifest
+verification against a built installer, silent uninstall, uninstall leaving nothing
+behind (install dir, registration, shortcut), and - the one that actually mattered -
+uninstall leaving USER DATA alone. That last check exists because its first run
+discovered the opposite: a silent uninstall deleting a real 110 MB browsing profile
+while reporting that it had not (`docs/releases/CHECKLIST-0.11.0.md`).
 
-What is missing is doing it on a machine that is not the development machine:
+Still open:
 
-- A genuinely clean Windows image with no Python, no Edge, no prior install.
-- Confirm the prerequisite refusals actually fire and read sensibly.
-- Confirm the uninstaller leaves nothing behind, and leaves user data alone unless
-  asked.
-- Automate it, so it is not a manual ritual before every release.
+- A genuinely clean Windows image with no Python, no Edge, no prior install. The
+  prerequisite refusals have not been re-verified since 0.9.1 - `verify_install.py`
+  cannot run them, because it refuses to run while bruhswer is already installed.
+- Launching from the Start Menu / Desktop shortcut. The shortcut is created and removed
+  correctly; nothing has actually clicked it.
 
 ### 3. Upgrade path
 
-Not designed yet, and it needs designing before there is a second release with a
-persistent profile people care about.
+Still not designed. Four releases (0.9.1 through 0.11.0) have shipped over an existing
+persistent profile without incident, but "nothing has broken yet" is not a design, and
+this stays open until it is one.
 
 Questions to answer: what happens to an existing profile across versions; what happens
 to quarantined files; what happens if the privacy-settings list changes; whether an

@@ -27,7 +27,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-312%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-322%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -114,7 +114,7 @@ the UI says so in the user's face rather than quietly rounding up.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) | Measured platform boundaries - the honest part |
-| [`docs/TESTING.md`](docs/TESTING.md) | What the 312 assertions actually prove, and what they can't |
+| [`docs/TESTING.md`](docs/TESTING.md) | What the 322 assertions actually prove, and what they can't |
 | [`docs/SECURITY-TESTING.md`](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [`docs/research/`](docs/research/) | Three isolation backends built, measured and rejected. History, not guidance |
 
@@ -431,7 +431,7 @@ recorded rollback.
 <table>
 <tr><td>
 
-**312** assertions across **17** suites, all passing, run twice with identical
+**322** assertions across **17** suites, all passing, run twice with identical
 results, zero known flaky tests. Against a real browser, a real firewall and a real network - not mocks.
 
 </td></tr>

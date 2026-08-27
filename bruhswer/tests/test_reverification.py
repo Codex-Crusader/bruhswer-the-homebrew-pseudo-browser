@@ -28,7 +28,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from app.security.verifier import VerificationResult  # noqa: E402
-from app.ui import verify_worker  # noqa: E402
+from app.ui import verification_ui, verify_worker  # noqa: E402
 from app.verdict import Check, Verdict  # noqa: E402
 
 
@@ -319,6 +319,185 @@ class _FakeRequest:
     def __init__(self, generation: int, verification_id: int = 0) -> None:
         self.generation = generation
         self.verification_id = verification_id
+
+
+class _StubController:
+    """Enough of Controller for _verify_async: one method, and a record of calls."""
+
+    def __init__(self) -> None:
+        self.requested_modes: list[str] = []
+
+    def verification_request(self, mode: str) -> str:
+        self.requested_modes.append(mode)
+        return f"request-for-{mode}"
+
+
+class _FakeRoot:
+    @staticmethod
+    def winfo_exists() -> bool:
+        return True
+
+
+class _AsyncVerifyWindow(verification_ui.VerificationUIMixin):
+    """Enough surface for _verify_async, and nothing else. _after does not schedule
+    anything on its own - the test calls _tick() to simulate one Tk `after` cycle,
+    the same relationship a real Tk mainloop has to a queued callback."""
+
+    def __init__(self) -> None:
+        self.controller = _StubController()
+        self.root = _FakeRoot()
+        self._closing = False
+        self._verify_in_flight = False
+        self.status = ""
+        self._pending: list = []
+
+    def _after(self, _delay_ms, callback):
+        self._pending.append(callback)
+        return len(self._pending)
+
+    def set_status(self, text: str) -> None:
+        self.status = text
+
+    def _tick(self) -> None:
+        due, self._pending = self._pending, []
+        for callback in due:
+            callback()
+
+
+class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
+    """_verify_async: the one-shot pass behind startup() and the BRUH CHECK panel.
+
+    Both used to call controller.verify() directly on the Tk thread, freezing the
+    window for the full ~5.5s a pass measures at, with the "Running security
+    verification..." status text never actually painting before the freeze started.
+    Pinned here the same way TestWorkerLifecycle pins VerifyWorker's contract: real
+    threading, mocked run_verification, no Tk mainloop.
+    """
+
+    def test_request_is_built_synchronously_before_any_thread_could_run(self):
+        """verification_request()'s own docstring: MUST run on the calling thread.
+        Only run_verification() may cross the thread boundary - this is what makes
+        that safe, and it must not quietly start happening off-thread instead."""
+        win = _AsyncVerifyWindow()
+        win._verify_async(  # lint: allow protected-access
+            "persistent", lambda _result: None)
+        # No _tick() yet, so nothing async has had a chance to run. If the request
+        # were built lazily - inside the worker thread instead of before it starts -
+        # this would still be empty here.
+        self.assertEqual(win.controller.requested_modes, ["persistent"])
+
+    def test_result_reaches_on_done_via_a_tick_not_the_background_thread(self):
+        calling_thread = threading.current_thread()
+        seen_from: list[threading.Thread] = []
+
+        def fake_run_verification(request):
+            self.assertEqual(request, "request-for-persistent")
+            return _result(_check("ok", Verdict.PASS))
+
+        def on_done(result):
+            seen_from.append(threading.current_thread())
+            seen_from.append(result)
+
+        original = verification_ui.ctrl.run_verification
+        verification_ui.ctrl.run_verification = fake_run_verification
+        try:
+            win = _AsyncVerifyWindow()
+            win._verify_async("persistent", on_done)  # lint: allow protected-access
+            deadline = time.monotonic() + 5.0
+            while not seen_from and time.monotonic() < deadline:
+                win._tick()  # lint: allow protected-access
+                time.sleep(0.01)
+        finally:
+            verification_ui.ctrl.run_verification = original
+
+        self.assertTrue(seen_from, "on_done was never called")
+        # on_done must run on the thread that calls _tick() (the Tk thread stand-in),
+        # never on the worker thread - it touches self.result and widgets.
+        self.assertIs(seen_from[0], calling_thread)
+        self.assertIs(seen_from[1].checks[0].verdict, Verdict.PASS)
+
+    def test_a_crashing_pass_reports_a_status_instead_of_hanging(self):
+        def fake_run_verification(_request):
+            raise RuntimeError("boom")
+
+        original = verification_ui.ctrl.run_verification
+        verification_ui.ctrl.run_verification = fake_run_verification
+        try:
+            win = _AsyncVerifyWindow()
+            received: list = []
+            win._verify_async(  # lint: allow protected-access
+                "persistent", received.append)
+            deadline = time.monotonic() + 5.0
+            while not win.status and time.monotonic() < deadline:
+                win._tick()  # lint: allow protected-access
+                time.sleep(0.01)
+        finally:
+            verification_ui.ctrl.run_verification = original
+
+        # A raised worker must not vanish silently - see VerifyWorker._run_once for
+        # the same rule applied to the ongoing loop.
+        self.assertEqual(received, [], "on_done ran on a failed pass")
+        self.assertTrue(win.status, "no status was ever set for the failed pass")
+
+    def test_a_second_call_while_one_is_running_is_refused_not_raced(self):
+        """The concurrency hazard this async version introduced and did not have
+        before: the old synchronous controller.verify() accidentally serialised
+        repeat clicks by freezing the window for the whole pass. A blocked-launch
+        curtain's "Check again" button, or the BRUH CHECK menu item, could not
+        physically be double-clicked. Async removed that accident; two overlapping
+        startup() calls could each decide independently to open a session, and the
+        second's controller.stop() would tear down what the first had just started.
+        """
+        gate = threading.Event()
+        calls = 0
+
+        def fake_run_verification(_request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                gate.wait(timeout=5.0)
+            return _result(_check("ok", Verdict.PASS))
+
+        original = verification_ui.ctrl.run_verification
+        verification_ui.ctrl.run_verification = fake_run_verification
+        try:
+            win = _AsyncVerifyWindow()
+            win._verify_async(  # lint: allow protected-access
+                "persistent", lambda _result: None)
+            self.assertEqual(win.controller.requested_modes, ["persistent"])
+
+            # A second call arrives while the first is still gated open - this is
+            # the double-click. It must not build a second request or start a
+            # second thread.
+            win._verify_async(  # lint: allow protected-access
+                "persistent", lambda _result: None)
+            self.assertEqual(win.controller.requested_modes, ["persistent"],
+                            "the second call was not refused: it built its own request")
+            self.assertTrue(win.status, "the refusal must say something, not be silent")
+
+            def in_flight() -> bool:
+                return win._verify_in_flight  # lint: allow protected-access
+
+            gate.set()
+            deadline = time.monotonic() + 5.0
+            while in_flight() and time.monotonic() < deadline:
+                win._tick()  # lint: allow protected-access
+                time.sleep(0.01)
+            self.assertFalse(in_flight(), "flag was never cleared")
+
+            # And a THIRD call, after the first has actually finished, must go
+            # through normally rather than being refused forever.
+            received: list = []
+            win._verify_async(  # lint: allow protected-access
+                "persistent", received.append)
+            deadline = time.monotonic() + 5.0
+            while not received and time.monotonic() < deadline:
+                win._tick()  # lint: allow protected-access
+                time.sleep(0.01)
+            self.assertEqual(len(received), 1,
+                            "the flag stayed stuck after the first pass")
+        finally:
+            verification_ui.ctrl.run_verification = original
 
 
 if __name__ == "__main__":

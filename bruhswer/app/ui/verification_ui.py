@@ -11,10 +11,15 @@ See session_lifecycle.py for why this is a mixin rather than a separate object.
 from __future__ import annotations
 
 import queue
+import threading
 import tkinter as tk
+from typing import Callable
 
 from .. import config
+from ..controller import controller as ctrl
+from ..logging_setup import get_logger
 from ..privacy import privacy_guard
+from ..security import verifier
 from ..sessions import session_manager
 from ..verdict import Verdict
 from . import verify_worker
@@ -23,10 +28,80 @@ from .window_shell import WindowShell
 
 _COLOUR = chrome.COLOUR
 _SHAPE = chrome.SHAPE
+_log = get_logger("ui")
 
 
 class VerificationUIMixin(WindowShell):
     """Status lights, regression warnings and the account banner."""
+
+    def _verify_async(
+            self, mode: str,
+            on_done: Callable[[verifier.VerificationResult], None]) -> None:
+        """Run one verification pass off the Tk thread, then deliver it on the Tk
+        thread. For a SINGLE pass - `startup()` and the BRUH CHECK panel - not for the
+        ongoing re-verification loop, which is `self._verifier` (VerifyWorker) below.
+
+        Deliberately its own thread rather than routed through `self._verifier`: that
+        object owns the ongoing loop's regression baseline (`_previous`), and folding a
+        one-shot pass into it would make that pass silently become the baseline the
+        session's first LIVE pass gets diffed against.
+
+        `verification_request()` builds the request; per its own docstring it MUST run
+        on the Tk thread, and does - only `run_verification()`, which touches no shared
+        state, crosses the thread boundary. This is the same split VerifyWorker uses
+        internally, applied once instead of on a timer.
+
+        A raised background thread must not vanish silently: it reports through
+        `_log.exception`, exactly as `VerifyWorker._run_once` does for the ongoing
+        loop, and `on_done` is skipped with a status message rather than leaving the
+        caller's "Running security verification..." text standing forever.
+
+        REFUSES A SECOND CALL WHILE ONE IS ALREADY RUNNING. The old synchronous
+        `controller.verify()` accidentally serialised repeat clicks by freezing the
+        window for the whole pass - the "Check again" button on a blocked-launch
+        curtain could not physically be double-clicked. Making this async removed
+        that accident without replacing it: two overlapping `startup()` calls would
+        each build their own request, each eventually decide independently whether to
+        open a session, and the second's `controller.stop()` would tear down whatever
+        the first had just started. `_verify_in_flight` is the explicit version of the
+        serialisation the freeze used to provide for free.
+        """
+        if self._verify_in_flight:
+            self.set_status("Security verification is already running.")
+            return
+        self._verify_in_flight = True
+
+        request = self.controller.verification_request(mode)
+        result_box: queue.Queue = queue.Queue(maxsize=1)
+
+        def worker() -> None:
+            try:
+                result_box.put(ctrl.run_verification(request))
+            except Exception:                # noqa: BLE001  # lint: allow broad-except - a crashed pass must not vanish silently
+                _log.exception("one-shot verification pass failed")
+                result_box.put(None)
+
+        threading.Thread(target=worker, daemon=True,
+                         name="bruhswer-verify-once").start()
+
+        def poll() -> None:
+            try:
+                if self._closing or not self.root.winfo_exists():
+                    return
+            except tk.TclError:
+                return        # interpreter already gone; a queued callback must not crash
+            try:
+                result = result_box.get_nowait()
+            except queue.Empty:
+                self._after(config.VERIFY_DRAIN_MS, poll)
+                return
+            self._verify_in_flight = False
+            if result is None:
+                self.set_status("Security verification failed to run. Try again.")
+                return
+            on_done(result)
+
+        poll()
 
     def _arm_panic_key(self) -> None:
         """Register the panic hotkey and show its REAL state, persistently.

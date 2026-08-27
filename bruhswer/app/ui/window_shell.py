@@ -25,6 +25,7 @@ WHY THE STUBS RAISE
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 
 from ..controller import controller as ctrl
 from ..security import verifier
@@ -69,6 +70,7 @@ class WindowShell:
     _jobs: set[str]
     _watch_job: str | None
     _drain_job: str | None
+    _verify_in_flight: bool
 
     # --- implemented in BrowserWindow -------------------------------------------
     def _unimplemented(self) -> str:
@@ -116,6 +118,11 @@ class WindowShell:
         raise NotImplementedError(self._unimplemented())
 
     def _stop_reverification(self) -> None:
+        raise NotImplementedError(self._unimplemented())
+
+    def _verify_async(
+            self, mode: str,
+            on_done: Callable[[verifier.VerificationResult], None]) -> None:
         raise NotImplementedError(self._unimplemented())
 
     # --- implemented in SessionLifecycleMixin ------------------------------------

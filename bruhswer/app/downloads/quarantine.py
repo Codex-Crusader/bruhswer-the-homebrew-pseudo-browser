@@ -143,9 +143,22 @@ class QuarantinedFile:
         return f"Content looks like: {self.sniffed_kind}."
 
 
+def folder_name_for(session_id: str) -> str:
+    """The on-disk quarantine folder name for a session id. Naming only, no I/O.
+
+    The single derivation. session_manager used to keep its own copy of this logic
+    (`_safe_session_folder`) to avoid importing this module, justified by a comment
+    claiming a session id is "always 16 hex characters" - true for disposable sessions,
+    not for the persistent one ("persistent000000"). Both of that copy's callers
+    happened to be guarded to disposable sessions only, so the divergence was never
+    live, but it existed behind a comment asserting it could not. Importing this one,
+    rather than hand-copying it a second time, is the fix.
+    """
+    return _SAFE_CHARS.sub("", session_id)[:32] or "session"
+
+
 def quarantine_dir_for(session_id: str) -> Path:
-    safe = _SAFE_CHARS.sub("", session_id)[:32] or "session"
-    target = config.QUARANTINE / safe
+    target = config.QUARANTINE / folder_name_for(session_id)
     target.mkdir(parents=True, exist_ok=True)
     return target
 

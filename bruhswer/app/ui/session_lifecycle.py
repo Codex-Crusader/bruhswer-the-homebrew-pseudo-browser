@@ -17,6 +17,7 @@ import tkinter as tk
 
 from .. import config
 from ..browser import embed
+from ..security import verifier
 from ..sessions import session_manager
 from . import dialogs
 from .window_shell import WindowShell
@@ -26,12 +27,23 @@ class SessionLifecycleMixin(WindowShell):
     """Startup, window hosting and teardown. Mixed into BrowserWindow."""
 
     def startup(self) -> None:
-        """Verify first. The browser only appears if the checks allow it (SS9)."""
+        """Verify first. The browser only appears if the checks allow it (SS9).
+
+        A full pass starts 14 helper processes and takes 5.5s, measured. Run
+        synchronously on the Tk thread this froze the window for that long on every
+        launch, with the status text below never actually painting before the freeze
+        started - Tk does not repaint until control returns to the event loop, and
+        nothing did until the freeze was already over. Routed through _verify_async so
+        the message is on screen and the window stays responsive while this runs.
+        """
         # Armed BEFORE verification, so a blocked launch - the state where an escape
         # hatch matters most - still shows the panic key's true state.
         self._arm_panic_key()
         self.set_status("Running security verification...")
-        self.result = self.controller.verify(session_manager.PERSISTENT)
+        self._verify_async(session_manager.PERSISTENT, self._on_startup_verified)
+
+    def _on_startup_verified(self, result: verifier.VerificationResult) -> None:
+        self.result = result
         self.refresh_lights()
 
         if self.result.blockers:
@@ -63,6 +75,14 @@ class SessionLifecycleMixin(WindowShell):
         # across and diffs the new session's first pass against the old session's last.
         self._stop_reverification()
 
+        # Shown and painted BEFORE the blocking stop() below, not after. stop() can
+        # take up to ~22s worst case (an 8s process wait, a 12s profile-process poll,
+        # a 2s settle), and painting the curtain only once that finished left the
+        # window looking frozen and blank for the whole wait, with nothing on screen
+        # explaining why.
+        self._show_curtain(f"Starting {mode} session...", config.FG_DIM)
+        self.root.update_idletasks()
+
         # Unconditionally, not "if is_running()". After the browser window closed on
         # its own, is_running() is False while a disposable session's profile and
         # quarantine are still on disk - so the old guard skipped the teardown the user
@@ -72,9 +92,6 @@ class SessionLifecycleMixin(WindowShell):
             self.set_status(message)
         self.hosted_hwnd = None
         self._host_attempts = 0
-
-        self._show_curtain(f"Starting {mode} session...", config.FG_DIM)
-        self.root.update_idletasks()
 
         outcome = self.controller.start(mode)
         self.result = outcome.result
@@ -323,6 +340,11 @@ class SessionLifecycleMixin(WindowShell):
         self._cancel_all_jobs()
 
         if self.controller.is_running():
+            # Painted BEFORE the blocking stop() call below - see open_session for
+            # why. Without this the window closing looked identical to it hanging,
+            # for as long as ~22s worst case.
+            self._show_curtain("Closing bruhswer...", config.FG_DIM)
+            self.root.update_idletasks()
             ok, message = self.controller.stop()
             if not ok:
                 # Do not claim a clean exit that did not happen (SS34).
@@ -361,6 +383,11 @@ class SessionLifecycleMixin(WindowShell):
         # spawning 14 helper processes a minute against a profile that has just been
         # deleted, and every result would be discarded as stale anyway.
         self._stop_reverification()
+
+        # Painted BEFORE the blocking stop() call below - see open_session for why.
+        self._show_curtain("Closing session...", config.FG_DIM)
+        self.root.update_idletasks()
+
         ok, message = self.controller.stop()
         self.hosted_hwnd = None
         self._show_curtain(message, config.OK_GREEN if ok else config.BAD_RED,

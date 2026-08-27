@@ -24,6 +24,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -34,7 +35,8 @@ from app.browser import embed  # noqa: E402
 from app.controller import controller as ctrl  # noqa: E402
 from app.security import verifier  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
-from app.ui import verify_worker  # noqa: E402
+from app.ui import session_lifecycle, verify_worker  # noqa: E402
+from app.ui.session_lifecycle import SessionLifecycleMixin  # noqa: E402
 from app.ui.verification_ui import VerificationUIMixin  # noqa: E402
 from app.verdict import Check, EvidenceKind, Verdict  # noqa: E402
 
@@ -49,7 +51,7 @@ def _result(*checks: Check) -> verifier.VerificationResult:
 
 
 class _FakeWidget:
-    """Enough tkinter surface for the verification mixin, and no more."""
+    """Enough tkinter surface for the verification and lifecycle mixins, no more."""
 
     def __init__(self) -> None:
         self.kw: dict = {}
@@ -70,6 +72,10 @@ class _FakeWidget:
     @staticmethod
     def winfo_exists() -> bool:
         return True
+
+    @staticmethod
+    def update_idletasks() -> None:
+        pass
 
 
 class _FakeHotkey:
@@ -446,6 +452,139 @@ class TestSessionSnapshotIsCoherent(unittest.TestCase):
             profile_dir=config.PROFILE_PERSISTENT,
             created=datetime.now(timezone.utc) - timedelta(hours=2, minutes=3, seconds=4))
         self.assertEqual(controller.snapshot().elapsed_text(), "2:03:04")
+
+
+class _FakeLifecycleController:
+    """Records when stop() was called relative to the curtain, and nothing else."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.running = True
+
+    @staticmethod
+    def pending_disposable_downloads() -> list:
+        return []
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def stop(self):
+        self.calls.append("stop")
+        self.running = False
+        return True, "stopped"
+
+    def start(self, _mode, url=None):
+        self.calls.append("start")
+        return ctrl.LaunchOutcome(True, "started", _result())
+
+
+class _LifecycleWindow(SessionLifecycleMixin):
+    """The lifecycle half, on fakes. Enough surface for open_session, close_session
+    and on_close - not the full BrowserWindow contract."""
+
+    def __init__(self) -> None:
+        self.controller = _FakeLifecycleController()
+        self.root = _FakeWidget()
+        self.result = None
+        self.hosted_hwnd = None
+        self._host_attempts = 0
+        self._closing = False
+        self._panic_fired = False
+        self.status = ""
+        self.calls: list[str] = []
+
+    # --- the shell surface the mixin calls, both from WindowShell and from the
+    # other mixin (VerificationUIMixin), which is not mixed in here -----------------
+    def _after(self, _delay_ms, _callback):  # lint: allow could-be-static
+        return "job"
+
+    def _show_curtain(self, message, _colour, _actions=None) -> None:
+        self.calls.append(f"curtain:{message.splitlines()[0]}")
+        self.controller.calls.append(f"curtain:{message.splitlines()[0]}")
+
+    def _hide_curtain(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def set_status(self, text: str) -> None:
+        self.status = text
+
+    def _cancel_all_jobs(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def refresh_lights(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def update_session_badge(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def _arm_panic_key(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def _refresh_panic_indicator(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def _start_reverification(self) -> None:  # lint: allow could-be-static
+        pass
+
+    def _stop_reverification(self) -> None:  # lint: allow could-be-static
+        pass
+
+
+@mock.patch.object(session_lifecycle, "embed", autospec=True)
+@mock.patch.object(session_lifecycle, "dialogs", autospec=True)
+class TestCurtainPaintsBeforeTheBlockingCall(unittest.TestCase):
+    """F-2: open_session, close_session and on_close each block on
+    controller.stop() (up to ~22s worst case: an 8s process wait, a 12s
+    profile-process poll, a 2s settle) or controller.start() (its own ~5.5s
+    verification pass). The curtain explaining that must be PAINTED - not just
+    scheduled - before the block starts, or the window looks frozen and blank for
+    the entire wait with nothing on screen saying why.
+
+    root.update_idletasks() is what forces the paint; there is no fake for that
+    effect, so what these pin is the cheaper, necessary half: _show_curtain runs
+    before controller.stop(), not after.
+    """
+
+    def _assert_curtain_before_stop(self, order: list[str]) -> None:
+        self.assertIn("stop", order, f"controller.stop() was never called: {order}")
+        curtains = [i for i, c in enumerate(order) if c.startswith("curtain")]
+        self.assertTrue(curtains, f"no curtain was shown at all before closing: {order}")
+        self.assertLess(curtains[0], order.index("stop"),
+                        f"curtain did not paint before stop(): {order}")
+
+    def test_open_session_shows_the_curtain_before_stopping_the_old_session(
+            self, mock_dialogs, _mock_embed):
+        mock_dialogs.confirm_disposable_downloads.return_value = True
+        win = _LifecycleWindow()
+        win.open_session(session_manager.PERSISTENT)
+        self._assert_curtain_before_stop(win.controller.calls)
+
+    def test_close_session_shows_the_curtain_before_stopping(
+            self, mock_dialogs, _mock_embed):
+        mock_dialogs.confirm_disposable_downloads.return_value = True
+        win = _LifecycleWindow()
+        win.close_session()
+        self._assert_curtain_before_stop(win.controller.calls)
+
+    def test_on_close_shows_the_curtain_before_stopping_a_running_session(
+            self, mock_dialogs, _mock_embed):
+        mock_dialogs.confirm_disposable_downloads.return_value = True
+        win = _LifecycleWindow()
+        win.controller.running = True
+        win.root.destroy = lambda: None
+        win.on_close()
+        self._assert_curtain_before_stop(win.controller.calls)
+
+    def test_on_close_with_no_running_session_does_not_need_a_curtain(
+            self, mock_dialogs, _mock_embed):
+        """Nothing to stop, so no curtain is required - this must not regress into
+        expecting one where there is nothing to wait for."""
+        mock_dialogs.confirm_disposable_downloads.return_value = True
+        win = _LifecycleWindow()
+        win.controller.running = False
+        win.root.destroy = lambda: None
+        win.on_close()
+        self.assertNotIn("stop", win.controller.calls)
 
 
 if __name__ == "__main__":
