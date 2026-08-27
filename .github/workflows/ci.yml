@@ -66,6 +66,12 @@ jobs:
           # the AST scans for dangerous primitives, the no-local-listener proof, URL
           # refusal, filename sanitisation, session destruction and config sanity.
           python bruhswer\tests\test_security.py
+          # Regression tests named after specific overclaims that were once live and
+          # green: a security indicator asserting something nobody measured. Each is
+          # written to fail against the pre-fix code, so this suite gates the exact
+          # defect class the project treats as a vulnerability in its own right - an
+          # audit finding it before this line existed for it is the failure mode.
+          python bruhswer\tests\test_overclaim_regressions.py
 
       - name: Import every module
         shell: pwsh

@@ -266,6 +266,19 @@ def _download_checks(profile_dir: Path, download_dir: Path) -> list[Check]:
                       detail="No session has run yet; set and verified at launch.",
                       evidence=detail, evidence_kind=EvidenceKind.READ_BACK,
                       unknown_reason=UnknownReason.NO_PROFILE_YET)]
+    if not ok and detail == privacy_guard.PREFS_UNREADABLE:
+        # "Could not read the file" is NOT "downloads would not be quarantined". This
+        # check is critical, so UNKNOWN still blocks launch - fail-closed is preserved -
+        # but it no longer reports a definite FAIL on the strength of a file bruhswer
+        # just failed to parse.
+        return [Check(
+            "downloads.quarantine", _DOWNLOAD_TITLE,
+            Verdict.UNKNOWN, critical=True,
+            detail=("The profile's Preferences file could not be read, so bruhswer "
+                    "cannot tell whether downloads would be quarantined. Treat this "
+                    "session as unverified until it can."),
+            evidence=detail, evidence_kind=EvidenceKind.READ_BACK,
+            unknown_reason=UnknownReason.UNREADABLE)]
     return [Check(
         "downloads.quarantine", _DOWNLOAD_TITLE,
         Verdict.PASS if ok else Verdict.FAIL, critical=True,

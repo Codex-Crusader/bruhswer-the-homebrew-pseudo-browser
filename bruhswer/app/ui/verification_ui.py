@@ -261,6 +261,10 @@ class VerificationUIMixin(WindowShell):
                 self.root.after_cancel(self._drain_job)
             except tk.TclError:
                 pass
+            # Cancelling directly (rather than through _cancel_all_jobs) bypasses the
+            # self-removal _after's wrapper does when a job actually runs, so the id
+            # must be discarded here too or it sits in _jobs until final teardown.
+            self._jobs.discard(self._drain_job)
             self._drain_job = None
         self._verifier.stop()
         self._panic_hotkey.stop()

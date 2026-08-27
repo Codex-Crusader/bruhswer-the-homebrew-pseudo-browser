@@ -255,7 +255,10 @@ def verify_download_directory(profile_dir: Path, download_dir: Path) -> tuple[bo
     try:
         prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False, "Preferences unreadable"
+        # SENTINEL, not a bare False - see verify_account_signin's note above for why.
+        # "Could not read the file" is not "downloads are not quarantined"; the caller
+        # must not turn a locked or mid-rewrite Preferences file into a critical FAIL.
+        return False, PREFS_UNREADABLE
 
     got = prefs.get("download", {}).get("default_directory")
     prompt = prefs.get("download", {}).get("prompt_for_download")

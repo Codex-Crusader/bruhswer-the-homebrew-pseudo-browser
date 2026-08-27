@@ -145,8 +145,23 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
 
         Returns the job id, so the few callers that also track a job in a named
         attribute (_watch_job, _drain_job) keep working unchanged.
+
+        `_jobs` used to only ever grow: nothing removed a completed job's id, so
+        `_watch` and `_drain` - both self-rescheduling for the life of the session -
+        added roughly 19,000 dead entries per hour. `_cancel_all_jobs` then had to walk
+        every one of them at teardown, calling `after_cancel` on ids Tk had long since
+        discarded. The callback is wrapped so a completed job removes its own id before
+        the caller's code runs, whether or not it reschedules a new one.
         """
-        job = self.root.after(delay_ms, callback)
+        job_id: list[str] = []
+
+        def _run_and_forget() -> None:
+            if job_id:
+                self._jobs.discard(job_id[0])
+            callback()
+
+        job = self.root.after(delay_ms, _run_and_forget)
+        job_id.append(job)
         self._jobs.add(job)
         return job
 

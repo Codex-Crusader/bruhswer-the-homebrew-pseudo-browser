@@ -53,7 +53,10 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/blob/main/SECURITY.md
 AppUpdatesURL={#AppURL}/releases
-VersionInfoVersion=0.9.2.0
+; Must track AppVersion. This was hardcoded and left at 0.9.2.0 through three
+; releases - Explorer's own Properties > Details tab would have shown a build two
+; versions behind the one actually installed.
+VersionInfoVersion={#AppVersion}.0
 VersionInfoDescription=bruhswer - browse the internet, trust absolutely nothing
 
 ; Per-user install. No elevation prompt, no shared install location.

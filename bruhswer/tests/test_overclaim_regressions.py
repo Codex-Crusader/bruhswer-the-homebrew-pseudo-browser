@@ -19,6 +19,12 @@ would have passed before the fix documents nothing.
   3. IPv6Summary       policy_summary() printed "IPv6 local ranges - BLOCKED" with the
                        same confidence as the IPv4 rows, which rest on an empirical
                        gate A16 measurement. No equivalent IPv6 measurement exists.
+  4. DownloadDirectory an unreadable Preferences file fell through to the same branch
+                       as a clean read that found the wrong directory, so a locked or
+                       mid-rewrite Preferences file produced a CRITICAL FAIL asserting
+                       "Downloads would NOT be quarantined" - on a file bruhswer had
+                       just failed to parse, on the one check in the suite marked
+                       critical.
 """
 
 from __future__ import annotations
@@ -113,7 +119,13 @@ class TestFailedRendererQueryIsNotSilence(unittest.TestCase):
     def test_genuinely_no_renderers_still_says_so(self):
         checks = browser_guard.verify_renderer_sandbox([])
         self.assertIs(checks[0].verdict, Verdict.UNKNOWN)
-        self.assertIn("No browser session is running", checks[0].detail)
+        # Must not claim "no browser session is running" - an empty list is also what
+        # a LIVE session with no renderer processes right now looks like (startup, or
+        # every tab discarded), and that claim would be false while the browser is on
+        # screen. Must not claim a session exists either - [] is also the pre-launch
+        # default, when there genuinely is none.
+        self.assertNotIn("No browser session is running", checks[0].detail)
+        self.assertNotIn("session", checks[0].detail)
 
     def test_the_two_states_do_not_share_a_message(self):
         failed = browser_guard.verify_renderer_sandbox(None)[0]
@@ -164,6 +176,53 @@ class TestUnreadablePreferencesIsNeverGreen(unittest.TestCase):
                 Path("profile"), "standard")
         account = next(c for c in checks if c.check_id == "privacy.account")
         self.assertIs(account.verdict, Verdict.PASS)
+
+
+class TestUnreadableDownloadPrefsIsNeverAFail(unittest.TestCase):
+    """Defect 4. 'Could not read the file' is not 'downloads are not quarantined'."""
+
+    def test_unreadable_preferences_returns_the_sentinel(self):
+        with mock.patch.object(Path, "is_file", lambda self: True), \
+             mock.patch.object(Path, "read_text",
+                               lambda self, **kw: "{ this is not json"):
+            ok, detail = privacy_guard.verify_download_directory(
+                Path("profile"), Path("quarantine"))
+        self.assertFalse(ok)
+        self.assertEqual(detail, privacy_guard.PREFS_UNREADABLE)
+
+    def test_unreadable_preferences_renders_as_unknown_not_fail(self):
+        with mock.patch.object(
+                privacy_guard, "verify_download_directory",
+                lambda p, d: (False, privacy_guard.PREFS_UNREADABLE)):
+            checks = verifier._download_checks(  # lint: allow protected-access
+                Path("profile"), Path("quarantine"))
+
+        self.assertEqual(len(checks), 1)
+        check = checks[0]
+        self.assertIs(
+            check.verdict, Verdict.UNKNOWN,
+            f"unreadable Preferences reported {check.verdict}: {check.detail}")
+        # Critical + UNKNOWN still blocks launch - fail-closed is preserved.
+        self.assertTrue(check.critical)
+        # And it must not assert the thing it could not check.
+        self.assertNotIn("Downloads would NOT be quarantined", check.detail)
+
+    def test_a_clean_read_that_actually_fails_is_still_a_fail(self):
+        """The fix must not turn a genuine misconfiguration into a permanent UNKNOWN."""
+        with mock.patch.object(
+                privacy_guard, "verify_download_directory",
+                lambda p, d: (False, "download directory is 'C:/wrong', expected ...")):
+            checks = verifier._download_checks(  # lint: allow protected-access
+                Path("profile"), Path("quarantine"))
+        self.assertIs(checks[0].verdict, Verdict.FAIL)
+
+    def test_a_clean_read_that_passes_still_passes(self):
+        with mock.patch.object(
+                privacy_guard, "verify_download_directory",
+                lambda p, d: (True, "downloads are directed to quarantine")):
+            checks = verifier._download_checks(  # lint: allow protected-access
+                Path("profile"), Path("quarantine"))
+        self.assertIs(checks[0].verdict, Verdict.PASS)
 
 
 class TestIPv6IsNotClaimedAsMeasured(unittest.TestCase):

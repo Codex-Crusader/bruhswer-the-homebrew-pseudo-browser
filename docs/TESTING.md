@@ -1,6 +1,6 @@
 # Testing
 
-**308 assertions across 17 suites, 0 failures.**
+**312 assertions across 17 suites, 0 failures.**
 
 Counts are read from the run output, never carried forward from a previous release -
 this number has drifted before when it was retyped from memory.
@@ -30,7 +30,7 @@ More usefully: what the tests actually establish, and what they deliberately do 
 |---|---|---|---|
 | `test_security.py` | 52 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity |
 | `test_urls_fuzz.py` | 13 | nothing | Address-bar normalisation properties: what is accepted, what is refused, and that nothing becomes a flag |
-| `test_overclaim_regressions.py` | 18 | nothing | The three indicators that lied in 0.9.2, each pinned so it cannot come back |
+| `test_overclaim_regressions.py` | 22 | nothing | The four indicators that lied - three in 0.9.2, one found by independent audit after 0.11.0 shipped - each pinned so it cannot come back |
 | `test_evidence_model.py` | 19 | nothing | Every check declares its evidence kind against a frozen table; every UNKNOWN carries a reason; probe statuses and reason codes stay in step |
 | `test_accessibility.py` | 16 | nothing | Verdicts are never carried by colour alone; the high-contrast and light palettes have their WCAG ratios **computed**, not asserted |
 | `test_window_surface.py` | 10 | nothing | The three-file split: every `self.X` resolves, no stub survives, the surface the UI suites drive is intact, neither mixin shadows the other |

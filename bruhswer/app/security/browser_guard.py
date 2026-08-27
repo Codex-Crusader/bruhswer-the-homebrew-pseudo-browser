@@ -251,7 +251,7 @@ def verify_renderer_sandbox(
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
             critical=False,
-            detail="No browser session is running, so there is nothing to measure yet.",
+            detail="No renderer processes were found to measure.",
             evidence="no renderer pids",
             evidence_kind=EvidenceKind.LIVE,
             unknown_reason=UnknownReason.NO_SESSION)]
