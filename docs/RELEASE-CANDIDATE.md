@@ -327,8 +327,7 @@ in place rather than quietly removed.
 7 findings raised. **7 accepted**, 0 rejected outright, **1 severity corrected after
 measurement** (C1 - the described junction escape does not occur on this platform;
 `shutil.rmtree` refuses to follow one, so the un-guarded code was a silent no-op rather
-than a delete-anything primitive). Full record with evidence and tests:
-[`CODEX-REVIEW-0.9.0.md`](CODEX-REVIEW-0.9.0.md).
+than a delete-anything primitive).
 
 One defect was found by **Claude and missed by Codex**, which had explicitly reviewed
 the file and pronounced it clean: an unanchored `.gitignore` pattern that would have

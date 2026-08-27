@@ -144,7 +144,7 @@ Details of the model, what was measured, and what remains unverified:
 - [docs/NETWORK-PRIVACY.md](docs/NETWORK-PRIVACY.md)
 - [docs/PRIVACY.md](docs/PRIVACY.md)
 - [docs/DATA-INVENTORY.md](docs/DATA-INVENTORY.md) - what is stored, and the encryption decision
-- [docs/CODEX-REVIEW-0.9.0.md](docs/CODEX-REVIEW-0.9.0.md) - the last independent review, with verdicts
+- [docs/RELEASE-CANDIDATE.md](docs/RELEASE-CANDIDATE.md) - the last independent review's findings, with verdicts
 - [docs/ROADMAP.md](docs/ROADMAP.md) - what is planned, and what is deliberately refused
 
 ## No certifications

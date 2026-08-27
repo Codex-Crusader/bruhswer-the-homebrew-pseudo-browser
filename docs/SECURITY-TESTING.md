@@ -311,8 +311,8 @@ The most valuable contributions, roughly in order:
    the same review as the application.
 
 The threat model, with attacker capabilities and what is explicitly not defended,
-is in [`SECURITY-MODEL.md`](SECURITY-MODEL.md). The record of the last independent review,
-including findings that were accepted, corrected and one whose severity was reduced
-after measurement, is in [`CODEX-REVIEW-0.9.0.md`](CODEX-REVIEW-0.9.0.md).
+is in [`SECURITY-MODEL.md`](SECURITY-MODEL.md). A summary of the last independent
+review's findings - accepted, corrected, and one whose severity was reduced after
+measurement - is in [`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md).
 
 Thank you for looking. Honest findings are the point of the project.

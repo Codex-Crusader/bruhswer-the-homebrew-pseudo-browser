@@ -155,6 +155,6 @@ researcher guide with trust boundaries, environment setup and an already-known t
 is in [`SECURITY-TESTING.md`](SECURITY-TESTING.md).
 
 bruhswer holds no security certification and has had no third-party audit. It has been
-reviewed by its author, by an independent model review
-([`CODEX-REVIEW-0.9.0.md`](CODEX-REVIEW-0.9.0.md)), and by static analysis. That is
-all, and it is stated so nobody has to infer it.
+reviewed by its author, by an independent model review (findings summarised in
+[`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md)), and by static analysis. That is all,
+and it is stated so nobody has to infer it.

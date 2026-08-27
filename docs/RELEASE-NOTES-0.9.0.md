@@ -166,8 +166,7 @@ reparse-point attribute test, and proven with a test that plants a real junction
 `downloads/` pattern matched `bruhswer/app/downloads/`, so the published source would
 have been missing the entire download-quarantine module.
 
-Full detail: [`CODEX-REVIEW-0.9.0.md`](CODEX-REVIEW-0.9.0.md) and
-[`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md).
+Full detail: [`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md).
 
 ---
 
