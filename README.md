@@ -31,6 +31,8 @@
 </p>
 
 ---
+> **Written up in full:** [codex-crusader.github.io/projects/bruhswer/](https://codex-crusader.github.io/projects/bruhswer/) covers the problem, the architecture, the results and what it deliberately does not do.
+
 
 ## 🗿 So what is this
 
