@@ -330,11 +330,18 @@ def _dns_checks() -> list[Check]:
     detail += (" bruhswer cannot confirm whether queries actually leave encrypted, "
                "so this is reported as UNKNOWN rather than guessed.")
 
+    # One probe failing is not zero rows. Counting an unread list as "none found"
+    # is the overclaim this project treats as a defect.
+    partial = not (doh_probe.ok and servers_probe.ok)
+    if partial:
+        detail += (" Part of this PC's DNS configuration could not be read, so the "
+                   "counts above cover only what was readable.")
+
     return [Check("dns.encrypted", "DNS is encrypted", Verdict.UNKNOWN,
                   critical=False, detail=detail,
                   evidence=f"templates={len(doh)} auto={len(auto)} "
                            f"configured={configured} untemplated={without} "
                            f"{doh_probe.reason()}",
                   evidence_kind=EvidenceKind.READ_BACK,
-                  # The config read fine; what the browser SENDS is the permanent gap.
-                  unknown_reason=UnknownReason.NEVER_MEASURED)]
+                  unknown_reason=(UnknownReason.PARTIAL_EVIDENCE if partial
+                                  else UnknownReason.NEVER_MEASURED))]

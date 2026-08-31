@@ -219,6 +219,54 @@ assumption.
 
 ---
 
+## 12. The file manifest is drift detection, not tamper protection
+
+**Structural, and it cannot be fixed here**
+
+bruhswer hashes its own Python source at startup and compares it to a manifest that
+shipped alongside it. That catches a damaged download, a truncated file, a partial
+upgrade that mixed two versions, and untargeted malware that rewrites `.py` files
+without knowing what bruhswer is.
+
+It does not stop an attacker. The manifest sits in the same folder as the code, and the
+code that reads the manifest sits next to both. Anyone who can edit `verifier.py` can
+edit `MANIFEST.sha256` and the checker in the same motion, and the check will report
+PASS afterwards. There is no trust anchor outside the thing being checked, because
+bruhswer runs unelevated in a directory the user owns.
+
+That is why the check is **non-critical** - a mismatch is worth reporting, not worth
+refusing to launch over, because the failure it most likely represents is a bad copy
+rather than an intrusion. It is titled *"Installed files match their manifest"* rather
+than anything containing the words *integrity* or *tamper*, and a test fails the build
+if that title ever grows one.
+
+Scope, stated precisely: it covers `bruhswer.py` and `app/**/*.py`. It does not cover
+`tests/`, `tools/`, the Python interpreter, the standard library, or any DLL the process
+loads.
+
+---
+
+## 13. The panic key can be taken by another application
+
+**Platform behaviour, reported rather than worked around**
+
+`Ctrl+Shift+End` is registered with `RegisterHotKey`, so exactly one process on the
+machine can hold it. If another application - including a second copy of bruhswer -
+registered it first, bruhswer cannot have it.
+
+When that happens the PANIC light goes **red** and reads `UNAVAILABLE`, for as long as
+it is true. There is deliberately no fallback to a Tk-level binding: a key that only
+works while bruhswer has focus is not a panic key, because the entire point is to fire
+while the hosted *browser* has focus. Offering a weaker key under the same name would
+be a claim bruhswer cannot keep.
+
+The panic path also reports only what it observed. `TerminateProcess` is asynchronous,
+so a process is only described as stopped once it has been waited on and seen to exit.
+If any process was refused, failed, or could not be opened, the result says
+**"bruhswer could NOT confirm the browser stopped"** rather than showing success.
+
+---
+
 ## How to read this page
 
 If you are evaluating bruhswer: this list is the point, not the disclaimer. A security

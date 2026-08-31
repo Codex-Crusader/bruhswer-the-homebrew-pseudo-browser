@@ -93,7 +93,7 @@ class PanicHotkey:
 
     def start(self) -> bool:
         """Start the listener and wait briefly for it to report registration."""
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             return self._registered
         self._ready.clear()
         self._thread = threading.Thread(
@@ -146,13 +146,6 @@ class PanicHotkey:
                     if code == ERROR_HOTKEY_ALREADY_REGISTERED
                     else f"Windows refused the hotkey (error {code})")
                 self._registered = False
-                # CLEAR THE THREAD HANDLE so a later start() actually tries again.
-                # Without this the dead thread stayed recorded, start() early-returned
-                # on `self._thread is not None`, and bruhswer remained permanently
-                # UNAVAILABLE for the rest of the run - even after the application
-                # holding Ctrl+Shift+End released it. Honestly red rather than falsely
-                # green, but a safety control left dead for no reason.
-                self._thread = None
                 return
             self._registered = True
         finally:

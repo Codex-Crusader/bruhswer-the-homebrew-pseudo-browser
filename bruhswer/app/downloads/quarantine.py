@@ -225,7 +225,7 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     # needed: on Windows a junction is a reparse point that is NOT a symlink.
     try:
         if (os.path.islink(item.path)  # noqa: PTH114
-                or (item.path.stat().st_file_attributes
+                or (item.path.stat(follow_symlinks=False).st_file_attributes
                     & config.FILE_ATTRIBUTE_REPARSE_POINT)):
             return False, "Refused: quarantined item is a link or reparse point."
     except (OSError, AttributeError):
@@ -258,10 +258,11 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     except (OSError, AttributeError):
         pass
 
-    final = dest_dir / safe_export_name(source.name)
+    chosen = Path(safe_export_name(source.name))
+    final = dest_dir / chosen.name
     counter = 1
     while final.exists():
-        final = dest_dir / f"{final.stem}_{counter}{final.suffix}"
+        final = dest_dir / f"{chosen.stem}_{counter}{chosen.suffix}"
         counter += 1
         if counter > 999:
             return False, "Could not find a free filename in that folder."

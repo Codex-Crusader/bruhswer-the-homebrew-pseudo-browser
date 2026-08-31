@@ -46,9 +46,6 @@ from .panels import (
     security_panel,
 )
 
-_COLOUR = chrome.COLOUR
-_WORD = chrome.WORD
-
 
 class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
     def __init__(self) -> None:
@@ -122,6 +119,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
             config.apply_high_contrast()
         elif embed.prefers_dark() is False:
             config.apply_light()
+        chrome.refresh_palette()
 
         self.root = tk.Tk()
         self.root.title(f"{config.MOAI} {config.APP_NAME}")
@@ -412,7 +410,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
 
     # ------------------------------------------------------------------ panels
 
-    def _panel(self, title: str, width: int = 640, height: int = 620) -> tk.Frame:
+    def _panel(self, title: str, width: int = 900, height: int = 660) -> tk.Frame:
         return chrome.scroll_panel(self.root, title, width, height)
 
     def open_security_panel(self) -> None:

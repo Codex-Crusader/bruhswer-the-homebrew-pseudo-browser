@@ -33,6 +33,9 @@ _ENTROPY_NOTE = ("All 9 identity values measured (User-Agent, platform, language
 _NO_PROFILE = ("No session has run yet, so there is no profile to read. These are "
                "written and re-verified when a session starts.")
 
+# Chromium preference keys are long and differ only at the end.
+_KEY_WIDTH = 58
+
 
 def render(body: tk.Misc, profile: Path, privacy_mode: str) -> None:
     applied, expected, missing = privacy_guard.verify_applied(profile, privacy_mode)
@@ -58,7 +61,8 @@ def render(body: tk.Misc, profile: Path, privacy_mode: str) -> None:
         else:
             value, colour = "CONFIRMED", config.OK_GREEN
         chrome.line(body, setting.key, value, colour,
-                    f"Reduces: {setting.reduces}   |   Costs: {setting.costs}")
+                    f"Reduces: {setting.reduces}   |   Costs: {setting.costs}",
+                    label_width=_KEY_WIDTH)
 
     chrome.heading(body, "Things bruhswer refuses to do")
     for name, why in privacy_guard.REJECTED:

@@ -176,13 +176,16 @@ class VerifyWorker:
         the worker verifying a session that has already been closed, and only the most
         recent one is ever interesting.
         """
+        self._drain_requests()
+        self._requests.put(request)
+        self._wake.set()
+
+    def _drain_requests(self) -> None:
         while True:
             try:
                 self._requests.get_nowait()
             except queue.Empty:
-                break
-        self._requests.put(request)
-        self._wake.set()
+                return
 
     def drain(self) -> list[VerificationUpdate]:
         """Take everything the worker has finished. Call from the Tk thread only."""
@@ -204,9 +207,10 @@ class VerifyWorker:
             thread.join(timeout=config.VERIFY_JOIN_TIMEOUT_SECONDS)
         self._thread = None
 
-        # Drop the baseline: it lives on this object, not the thread, so without this
-        # the next session's first pass is diffed against the previous session's last.
+        # These live on the object, not the thread: the next session starts clean.
         self._previous = None
+        self._drain_requests()
+        self._wake.clear()
 
     # --- worker thread ----------------------------------------------------------
 

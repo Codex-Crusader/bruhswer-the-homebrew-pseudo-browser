@@ -27,7 +27,6 @@ from .panels import chrome
 from .window_shell import WindowShell
 
 _COLOUR = chrome.COLOUR
-_SHAPE = chrome.SHAPE
 _log = get_logger("ui")
 
 

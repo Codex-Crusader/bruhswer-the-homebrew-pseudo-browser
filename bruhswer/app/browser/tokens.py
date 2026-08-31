@@ -43,6 +43,7 @@ TOKEN_IS_APPCONTAINER = 29
 
 INTEGRITY_NAMES = {0x0000: "UNTRUSTED", 0x1000: "LOW", 0x2000: "MEDIUM",
                    0x2100: "MEDIUM_PLUS", 0x3000: "HIGH", 0x4000: "SYSTEM"}
+_INTEGRITY_ORDER = list(INTEGRITY_NAMES.values())
 
 KERNEL32.OpenProcess.restype = wt.HANDLE
 KERNEL32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
@@ -177,6 +178,6 @@ def summarise_renderers(renderer_pids: Sequence[int]) -> dict:
         "zero_privileges": sum(1 for f in readable if f.privilege_count == 0),
         "worst_integrity": max(
             (f.integrity or "?" for f in readable),
-            key=lambda name: list(INTEGRITY_NAMES.values()).index(name)
-            if name in INTEGRITY_NAMES.values() else 99),
+            key=lambda name: (_INTEGRITY_ORDER.index(name)
+                              if name in _INTEGRITY_ORDER else 99)),
     }

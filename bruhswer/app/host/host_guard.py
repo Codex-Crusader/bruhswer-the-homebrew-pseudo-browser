@@ -68,6 +68,7 @@ _SHARING_GROUPS = (
     ("network-discovery", "Network Discovery"),
     ("remote-desktop", "Remote Desktop"),
 )
+_SHARING_KEYS = {name: key for key, name in _SHARING_GROUPS}
 
 
 def _unmeasured(check_id: str, title: str, what: str, probe,
@@ -124,18 +125,18 @@ def evaluate() -> list[Check]:
             primary = active[0]
             category = str(primary.get("NetworkCategory", ""))
             name = str(primary.get("Name", "?"))
-            on_untrusted = category in ("Public",)
+            on_public = category in ("Public",)
             checks.append(Check(
                 "host.network", "Network category",
-                Verdict.PASS if on_untrusted else Verdict.UNKNOWN, critical=False,
+                Verdict.PASS if on_public else Verdict.UNKNOWN, critical=False,
                 detail=(f"'{name}' is {category}."
-                        + (" Windows applies its restrictive profile." if on_untrusted
+                        + (" Windows applies its restrictive profile." if on_public
                            else " On an untrusted network, Public is safer.")),
                 evidence=f"category={category} {profiles.reason()}",
                 evidence_kind=EvidenceKind.READ_BACK,
                 # The category read fine. What is unknown on a non-Public network is
                 # whether this network is trustworthy, which nobody has measured.
-                unknown_reason=(UnknownReason.NONE if on_untrusted
+                unknown_reason=(UnknownReason.NONE if on_public
                                 else UnknownReason.NEVER_MEASURED)))
 
     # --- firewall ---------------------------------------------------------------
@@ -176,7 +177,7 @@ def evaluate() -> list[Check]:
             name = str(group.get("Group", "?"))
             enabled = int(group.get("Enabled") or 0)
             total = int(group.get("Total") or 0)
-            key = name.lower().replace(" ", "-")
+            key = _SHARING_KEYS.get(name, name.lower().replace(" ", "-"))
             exposed = enabled > 0
             checks.append(Check(
                 f"host.sharing.{key}", name,

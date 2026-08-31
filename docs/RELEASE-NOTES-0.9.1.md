@@ -5,7 +5,7 @@ no change to what bruhswer enforces. One real defect fixed, one user-visible ren
 bug fixed, and one honesty correction to the documentation.
 
 Still `0.9.x`, still a research-grade beta, still unsigned. What keeps it below `1.0.0`
-is unchanged and listed in the [README](../README.md#release-status).
+is unchanged and listed in the [README](../README.md#status).
 
 ---
 

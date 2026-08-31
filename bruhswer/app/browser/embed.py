@@ -39,6 +39,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import subprocess
+import winreg
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,6 +113,11 @@ USER32.PostMessageW.restype = wt.BOOL
 USER32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
 USER32.SetProcessDpiAwarenessContext.restype = wt.BOOL
 USER32.SetProcessDPIAware.restype = wt.BOOL
+USER32.SystemParametersInfoW.argtypes = [wt.UINT, wt.UINT, ctypes.c_void_p,
+                                         wt.UINT]
+USER32.SystemParametersInfoW.restype = wt.BOOL
+USER32.GetSystemMetrics.argtypes = [ctypes.c_int]
+USER32.GetSystemMetrics.restype = ctypes.c_int
 
 _U32 = 0xFFFFFFFF
 
@@ -644,8 +650,6 @@ def prefers_dark() -> bool | None:
     Read from the user's own registry hive with winreg - no subprocess, and nothing
     outside HKCU is touched.
     """
-    import winreg
-
     try:
         with winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,

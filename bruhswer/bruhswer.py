@@ -19,12 +19,13 @@ Neither mode launches a browser, and neither changes anything.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import config  # noqa: E402
+from app import config, sysquery  # noqa: E402
 from app.controller import controller as ctrl  # noqa: E402
 from app.logging_setup import get_logger  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
@@ -146,6 +147,16 @@ def run_hostguard() -> int:
     return 0
 
 
+def _is_reparse_point(path: Path) -> bool:
+    """True for a symlink OR a directory junction, which is_symlink() misses."""
+    try:
+        info = path.stat(follow_symlinks=False)
+    except OSError:
+        return True
+    return bool(getattr(info, "st_file_attributes", 0)
+                & config.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def run_uninstall() -> int:
     """Show and remove everything bruhswer has put on this machine.
 
@@ -157,10 +168,6 @@ def run_uninstall() -> int:
 
     Removes what it can unelevated, and prints the exact commands for what it cannot.
     """
-    import shutil
-
-    from app import sysquery
-
     print(f"{config.MOAI} bruhswer - remove everything")
     print("=" * 78)
 
@@ -219,9 +226,10 @@ def run_uninstall() -> int:
         # are bruhswer's own constants, so a junction sitting at one of them is not a
         # normal state - it is either a deliberate redirection or damage, and either
         # way turning a recursive delete loose on its target is the wrong response.
-        if path.is_symlink():
-            print(f"  SKIPPED: {path} is a link, not a folder. Refusing to delete "
-                  f"through it - check what it points at before removing it by hand.")
+        if _is_reparse_point(path):
+            print(f"  SKIPPED: {path} is a link or junction, not a folder. Refusing "
+                  f"to delete through it - check what it points at before removing "
+                  f"it by hand.")
             continue
         shutil.rmtree(path, ignore_errors=True)
         print(f"  removed: {path}  ->  gone={not path.exists()}")

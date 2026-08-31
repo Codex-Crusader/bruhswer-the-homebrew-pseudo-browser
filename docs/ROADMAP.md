@@ -3,7 +3,7 @@
 What is planned, in rough priority order. Nothing here is promised, and nothing here is
 a claim about the current release - if it is on this page, **it does not exist yet**.
 
-Current release: **v0.11.0**, pre-1.0. What it actually does and does not do is in
+Current release: **v0.12.0**, pre-1.0. What it actually does and does not do is in
 [`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md) (the original 0.9.0 publication pass;
 see `docs/releases/CHECKLIST-0.11.0.md` for what changed since) and the
 [README](../README.md).
