@@ -85,6 +85,20 @@ published code.
 This matters more than signing does for a security tool: signing says who built it,
 reproducibility says what they built.
 
+**Partly addressed as of 0.12.0, and the boundary matters.** CI now generates a
+signed SLSA build-provenance attestation for the installer and verifies it in the
+same run. Anyone can check which commit and which workflow produced a given binary:
+
+```
+gh attestation verify bruhswer-0.12.0-setup.exe \n  --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
+```
+
+That sits between the two claims above: stronger than signing, because it binds the
+artifact to a specific source commit and build, and weaker than reproducibility,
+because you still cannot rebuild the tagged source yourself and confirm you get the
+same bytes. You are trusting GitHub's runner rather than checking its work. The four
+items above remain open and this item is NOT done.
+
 ### 5. CI security regression tests
 
 CI today runs the honest subset: unit tests, the AST scans, the no-listener proof,

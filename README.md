@@ -144,6 +144,18 @@ Grab the installer from [Releases](../../releases), check the SHA-256 against th
 published checksum, and run it. It installs to your user folder, needs no Administrator,
 and creates no service, no scheduled task and no background updater.
 
+You can also check which commit and workflow built it, without trusting the checksum
+line to have been written honestly:
+
+```powershell
+gh attestation verify bruhswer-0.12.0-setup.exe `
+  --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
+```
+
+That proves the binary came from this repository's own CI, from a named commit. It is
+not a reproducible build - you still cannot rebuild it yourself and compare - and it
+is not code signing.
+
 > **The release is unsigned.** SmartScreen will warn you about an unrecognised
 > publisher, and it is right to. Verify the checksum.
 

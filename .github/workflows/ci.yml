@@ -273,6 +273,12 @@ jobs:
   installer-script:
     name: CI-safe - installer script builds
     runs-on: windows-latest
+    # Scoped to this job rather than the workflow: only the job that produces an
+    # artifact may mint an attestation for one.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -290,6 +296,49 @@ jobs:
           # by hand on a real Windows machine before a release, because a runner
           # has no Edge, no user profile and nothing to uninstall from.
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\bruhswer.iss
+
+      # WHAT THIS PROVES, AND WHAT IT DOES NOT
+      #
+      # A signed attestation binding this exact binary to the commit and workflow
+      # that produced it, verifiable by anyone with:
+      #
+      #   gh attestation verify bruhswer-<version>-setup.exe --repo <this repo>
+      #
+      # That answers "was this installer built from the published source, by this
+      # repository's own CI". It does NOT make the build reproducible: nobody can
+      # yet rebuild the tagged source and get a byte-identical file, which is a
+      # different and stronger claim and is still open in docs/ROADMAP.md item 4.
+      # It is also not code signing - the release remains unsigned.
+      #
+      # Skipped on pull_request: a fork's token cannot be granted
+      # attestations: write, so attesting there would fail the build for a
+      # contributor rather than tell anyone anything.
+      - name: Attest what built this installer
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: installer/Output/*.exe
+
+      # Read the attestation back, for the same reason tools/hash_manifest.py
+      # re-verifies a manifest it has just written: publishing one without
+      # checking it is how you ship a verification step that never worked.
+      - name: Verify the attestation this run just produced
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = Get-ChildItem installer/Output/*.exe | Select-Object -First 1
+          # Bounded retry: the attestation is indexed asynchronously, and a
+          # verification that fails purely on propagation would be a flaky test.
+          foreach ($attempt in 1..4) {
+            gh attestation verify $exe.FullName --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Output "attempt $attempt did not verify yet; waiting"
+            Start-Sleep -Seconds 15
+          }
+          Write-Output '::error::the attestation this run produced does not verify'
+          exit 1
 
       - name: Publish the built installer for inspection
         uses: actions/upload-artifact@v4

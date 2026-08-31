@@ -98,6 +98,8 @@ The one that matters most for this project.
 [ ] Published asset downloaded and re-hashed after upload
 [ ] Release notes written, including what changed and what is still not guaranteed
 [ ] Signing status stated honestly (unsigned is fine; pretending is not)
+[ ] Provenance verified against the PUBLISHED asset, not the local build:
+      gh attestation verify <asset> --repo <this repo>
 [ ] Tag pushed
 ```
 
