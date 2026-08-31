@@ -12,13 +12,13 @@ Use GitHub's private vulnerability reporting on this repository:
 
 > **Security** tab → **Report a vulnerability**
 
-That opens a private advisory visible only to the maintainers. It is the only
+That opens a private advisory visible only to the maintainer. It is the only
 supported reporting channel - there is deliberately no email address here, so nothing
 in this repository has to carry a personal contact detail forever.
 
 If private reporting is not enabled or not available to you, open a public issue
 containing **only** the words "security report, please enable private advisories" and
-no technical detail. A maintainer will enable it and follow up.
+no technical detail. The maintainer will enable it and follow up.
 
 ### Testing bruhswer
 
@@ -45,9 +45,10 @@ platform limitation.
 | Initial assessment | 30 days |
 | Fix or documented decision | best effort - see below |
 
-bruhswer is maintained by volunteers. These are honest targets, not a contractual
-SLA, and pretending otherwise would be exactly the kind of unearned assurance this
-project refuses to give elsewhere.
+bruhswer is built and maintained by one person in their own time. These are honest
+targets, not a contractual SLA, and there is no second maintainer to pick up a
+report if that one is unavailable. Stating it plainly is the same rule the rest of
+this project follows: an unearned assurance is worse than a stated limit.
 
 ### Disclosure
 
@@ -60,7 +61,7 @@ in the advisory unless they ask not to be.
 
 | Version | Supported |
 |---|---|
-| 0.9.x (current pre-1.0) | Yes |
+| 0.12.x (current pre-1.0) | Yes |
 | earlier | No |
 
 bruhswer is pre-1.0. Only the latest release receives fixes.
