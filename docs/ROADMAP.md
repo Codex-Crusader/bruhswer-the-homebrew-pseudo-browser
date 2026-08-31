@@ -3,7 +3,7 @@
 What is planned, in rough priority order. Nothing here is promised, and nothing here is
 a claim about the current release - if it is on this page, **it does not exist yet**.
 
-Current release: **v0.12.0**, pre-1.0. What it actually does and does not do is in
+Current release: **v0.12.1**, pre-1.0. What it actually does and does not do is in
 [`RELEASE-CANDIDATE.md`](RELEASE-CANDIDATE.md) (the original 0.9.0 publication pass;
 see `docs/releases/CHECKLIST-0.11.0.md` for what changed since) and the
 [README](../README.md).
@@ -90,7 +90,7 @@ build-provenance attestation for the installer and verifies it in the same run.
 Anyone can check which commit and which workflow produced a given binary:
 
 ```
-gh attestation verify <the-installer>.exe \n  --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
+gh attestation verify bruhswer-0.12.1-setup.exe \n  --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
 ```
 
 This applies to releases built AFTER v0.12.0. The v0.12.0 asset predates it and has
