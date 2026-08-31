@@ -131,25 +131,14 @@ def _relative_key(path: Path, root: Path) -> str:
 def hash_file(path: Path) -> str | None:
     """SHA-256 of one source file, with line endings normalised. None if unreadable.
 
-    LINE ENDINGS ARE NORMALISED TO LF BEFORE HASHING, and the reason is not tidiness -
-    without it the whole feature is broken on a fresh clone.
+    MEASURED: git stores LF and checks CRLF out into the working tree here
+    (`git ls-files --eol` reports `i/lf w/crlf`), so hashing raw bytes would make every
+    fresh clone report FAIL on a perfectly good copy - a check that cries wolf on a
+    clean install teaches the user to ignore the one indicator that matters.
 
-    MEASURED in this repository: `core.autocrlf` is true and there is no
-    `.gitattributes`, so git stores LF and checks CRLF out into the working tree
-    (`git ls-files --eol` reports `i/lf w/crlf`). A manifest generated on one working
-    copy therefore records different bytes from the ones a fresh clone produces, and
-    every install would report FAIL on a perfectly good copy.
-
-    That failure mode is worse than having no check at all: a manifest that cries wolf
-    on every clean install teaches the user to ignore the one indicator meant to tell
-    them their copy was damaged. This is exactly the risk the release checklist warns
-    about for a stale manifest, arriving by a different route.
-
-    So the hash is of the file's CONTENT, independent of how it happens to be checked
-    out. It still detects a changed byte, a truncated file, an inserted line, or a
-    rewritten function - everything the check claims. What it deliberately does not
-    detect is a pure line-ending conversion, which is not a change to the code and is
-    performed routinely by git itself.
+    Hashing CONTENT still detects a changed byte, a truncation, an inserted line or a
+    rewritten function. It deliberately does not detect a pure line-ending conversion,
+    which git performs routinely and which is not a change to the code.
     """
     digest = hashlib.sha256()
     try:

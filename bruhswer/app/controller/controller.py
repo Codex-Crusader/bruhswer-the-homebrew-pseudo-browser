@@ -12,6 +12,7 @@ controller's attack surface has to be small by construction rather than by filte
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -498,14 +499,12 @@ class Controller:
     @staticmethod
     def _stop_profile_processes(profile_dir: Path, timeout: float = 12.0) -> int:
         """Ask this session's browser processes to stop, then confirm they did."""
-        import time as _time
-
-        deadline = _time.time() + timeout
-        while _time.time() < deadline:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             pids = embed.edge_pids_for_profile(profile_dir)
             if not pids:
                 return 0
-            _time.sleep(1.0)
+            time.sleep(1.0)
 
         pids = embed.edge_pids_for_profile(profile_dir)
         for pid in pids:
@@ -518,7 +517,7 @@ class Controller:
                     creationflags=config.NO_WINDOW)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-        _time.sleep(2.0)
+        time.sleep(2.0)
         remaining = embed.edge_pids_for_profile(profile_dir)
         if remaining:
             _log.warning("%d browser process(es) still running after stop",

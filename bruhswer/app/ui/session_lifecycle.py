@@ -129,7 +129,8 @@ class SessionLifecycleMixin(WindowShell):
         hwnd = self.controller.find_browser_window()
         # Having a window is not the same as being able to paint into it. Wait for the
         # compositor, or the reparent lands in the gap and the page never draws.
-        if hwnd and not embed.is_paint_ready(hwnd) and self._host_attempts < 25:
+        if (hwnd and not embed.is_paint_ready(hwnd)
+                and self._host_attempts < config.HOST_MAX_ATTEMPTS):
             self._after(120, self._try_host)
             return
         if hwnd:
@@ -148,7 +149,7 @@ class SessionLifecycleMixin(WindowShell):
                 self._watch_job = self._after(1500, self._watch)
                 return
 
-        if self._host_attempts < 25:
+        if self._host_attempts < config.HOST_MAX_ATTEMPTS:
             self._after(800, self._try_host)
             return
 
@@ -272,9 +273,8 @@ class SessionLifecycleMixin(WindowShell):
             return
         title = self.controller.browser_title()
         if title:
-            clean = title.replace(" - Microsoft Edge", "").replace(
-                " - Microsoft Edge", "")
-            self.status_text.config(text=clean[:90])
+            self.status_text.config(
+                text=title.replace(" - Microsoft Edge", "")[:90])
         self._watch_job = self._after(1500, self._watch)
 
     def _on_panic(self) -> None:

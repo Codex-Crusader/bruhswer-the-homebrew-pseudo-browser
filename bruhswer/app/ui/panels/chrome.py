@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 
 from ... import config
 from ...verdict import Verdict
 
+
 # Single source of truth. Everything that renders a verdict points here, so the control
 # panel and the browser window cannot drift and show the same verdict two ways.
-COLOUR = {Verdict.PASS: config.OK_GREEN,
-          Verdict.FAIL: config.BAD_RED,
-          Verdict.UNKNOWN: config.WARN_AMBER}
+def _verdict_colours() -> dict[Verdict, str]:
+    return {Verdict.PASS: config.OK_GREEN,
+            Verdict.FAIL: config.BAD_RED,
+            Verdict.UNKNOWN: config.WARN_AMBER}
+
+
+def refresh_palette() -> None:
+    """Re-read the verdict colours after a theme switch. Updates COLOUR in place,
+    because browser_window and verification_ui alias this dict at import."""
+    COLOUR.update(_verdict_colours())
+
+
+COLOUR = _verdict_colours()
 WORD = {Verdict.PASS: "OK", Verdict.FAIL: "EXPOSED", Verdict.UNKNOWN: "UNKNOWN"}
 
 # Colour AND a word for every verdict, so the state survives being read by someone who
@@ -30,8 +42,8 @@ def check_line(parent: tk.Misc, check) -> None:
          shape=SHAPE[check.verdict], note_prefix=check.evidence_note())
 
 
-def scroll_panel(root: tk.Misc, title: str, width: int = 640,
-                 height: int = 620) -> tk.Frame:
+def scroll_panel(root: tk.Misc, title: str, width: int = 900,
+                 height: int = 660) -> tk.Frame:
     """Open a scrollable Toplevel and return the frame panels should pack into."""
     win = tk.Toplevel(root)
     win.title(f"{config.MOAI} {title}")
@@ -56,14 +68,42 @@ def heading(parent: tk.Misc, text: str) -> None:
         fill="x", padx=16, pady=(14, 5))
 
 
+LABEL_FONT = ("Segoe UI", 10)
+LABEL_WIDTH = 34
+_label_font: tkfont.Font | None = None
+
+
+def _elide(text: str, width_chars: int) -> str:
+    """Shorten to fit the label column, keeping BOTH ends of the text.
+
+    Cutting the tail would be wrong here: 11 of the privacy preference keys share
+    their first 34 characters, so a head-only label renders eleven different
+    settings - each with its own verdict - as the same string.
+    """
+    global _label_font
+    if _label_font is None:
+        _label_font = tkfont.Font(font=LABEL_FONT)
+    limit = _label_font.measure("0" * width_chars)
+    if _label_font.measure(text) <= limit:
+        return text
+    for keep in range(len(text) - 1, 3, -1):
+        head = keep // 2
+        candidate = text[:head] + "…" + text[len(text) - (keep - head):]
+        if _label_font.measure(candidate) <= limit:
+            return candidate
+    return "…"
+
+
 def line(parent: tk.Misc, label: str, value: str, colour: str, note: str = "",
-         shape: str = "●", note_prefix: str = "") -> None:
+         shape: str = "●", note_prefix: str = "",
+         label_width: int = LABEL_WIDTH) -> None:
     row = tk.Frame(parent, bg=config.BG_DARK)
     row.pack(fill="x", padx=16, pady=1)
     tk.Label(row, text=shape, font=("Segoe UI", 10), bg=config.BG_DARK,
              fg=colour).pack(side="left", padx=(0, 7))
-    tk.Label(row, text=label, font=("Segoe UI", 10), width=34, anchor="w",
-             bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
+    tk.Label(row, text=_elide(label, label_width), font=LABEL_FONT,
+             width=label_width, anchor="w", bg=config.BG_DARK,
+             fg=config.BRAND_WHITE).pack(side="left", padx=(0, 10))
     tk.Label(row, text=value, font=("Consolas", 9), anchor="w",
              bg=config.BG_DARK, fg=colour).pack(side="left")
     if note_prefix:
@@ -75,8 +115,8 @@ def line(parent: tk.Misc, label: str, value: str, colour: str, note: str = "",
                  fg=config.FG_DIM).pack(fill="x", padx=(44, 16), pady=(0, 4))
 
 
-def paragraph(parent: tk.Misc, text: str, colour: str = config.FG_DIM,
+def paragraph(parent: tk.Misc, text: str, colour: str | None = None,
               font: tuple = ("Segoe UI", 9), pady: int = 6) -> None:
     tk.Label(parent, text=text, font=font, justify="left", wraplength=580,
-             anchor="w", bg=config.BG_DARK, fg=colour).pack(
+             anchor="w", bg=config.BG_DARK, fg=colour or config.FG_DIM).pack(
         fill="x", padx=16, pady=pady)

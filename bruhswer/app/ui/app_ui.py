@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import functools
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, ttk
 
 from .. import config
+from ..browser import embed
 from ..controller import controller as ctrl
 from ..downloads import quarantine
 from ..host import host_guard
@@ -26,15 +28,18 @@ from ..security import verifier
 from ..sessions import session_manager
 from .panels import chrome, network_panel
 
-# Derived from panels.chrome, never restated: this module used to keep its own copy and
-# could drift from the browser window.
-_DOT = {verdict: ("●", colour) for verdict, colour in chrome.COLOUR.items()}
-_WORD = chrome.WORD
-
 
 class BruhswerUI:
     def __init__(self) -> None:
         self.controller = ctrl.Controller()
+
+        self.high_contrast = embed.high_contrast()
+        if self.high_contrast:
+            config.apply_high_contrast()
+        elif embed.prefers_dark() is False:
+            config.apply_light()
+        chrome.refresh_palette()
+
         self.root = tk.Tk()
         self.root.title(f"{config.MOAI} {config.APP_NAME}")
         self.root.configure(bg=config.BG_DARK)
@@ -267,10 +272,12 @@ class BruhswerUI:
         row = tk.Frame(parent, bg=config.BG_DARK)
         row.pack(fill="x", padx=18, pady=1)
         if not check.enforceable:
-            glyph, colour, word = "●", config.BAD_RED, "NOT ENFORCEABLE"
+            glyph = chrome.NOT_ENFORCEABLE_SHAPE
+            colour, word = config.WARN_AMBER, "NOT ENFORCEABLE"
         else:
-            glyph, colour = _DOT[check.verdict]
-            word = _WORD[check.verdict]
+            glyph = chrome.SHAPE[check.verdict]
+            colour = chrome.COLOUR[check.verdict]
+            word = chrome.WORD[check.verdict]
         tk.Label(row, text=glyph, font=("Segoe UI", 11), bg=config.BG_DARK,
                  fg=colour).pack(side="left", padx=(0, 8))
         tk.Label(row, text=check.title, font=("Segoe UI", 10), width=38, anchor="w",
@@ -318,13 +325,14 @@ class BruhswerUI:
         for name, verdict, blurb in ctrl.summarise(self._checked):
             row = tk.Frame(body, bg=config.BG_DARK)
             row.pack(fill="x", padx=18, pady=2)
-            glyph, colour = _DOT[verdict]
+            glyph = chrome.SHAPE[verdict]
+            colour = chrome.COLOUR[verdict]
             tk.Label(row, text=glyph, font=("Segoe UI", 12), bg=config.BG_DARK,
                      fg=colour).pack(side="left", padx=(0, 8))
             tk.Label(row, text=name, font=("Consolas", 10, "bold"), width=13,
                      anchor="w", bg=config.BG_DARK,
                      fg=config.BRAND_WHITE).pack(side="left")
-            tk.Label(row, text=_WORD[verdict], font=("Consolas", 10), width=10,
+            tk.Label(row, text=chrome.WORD[verdict], font=("Consolas", 10), width=10,
                      anchor="w", bg=config.BG_DARK, fg=colour).pack(side="left")
             tk.Label(row, text=blurb, font=("Segoe UI", 9), anchor="w",
                      bg=config.BG_DARK, fg=config.FG_DIM).pack(side="left")
@@ -461,7 +469,6 @@ class BruhswerUI:
         target = filedialog.askdirectory(title="Export to which folder?")
         if not target:
             return
-        from pathlib import Path
         ok, message = self.controller.export_request(item, Path(target))
         self.status_line.config(
             text=message, fg=config.OK_GREEN if ok else config.BAD_RED)

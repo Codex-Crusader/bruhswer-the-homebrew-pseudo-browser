@@ -30,7 +30,7 @@
 ; explanation, if they are not.
 
 #define AppName        "bruhswer"
-#define AppVersion     "0.11.0"
+#define AppVersion     "0.12.0"
 ; Shown as the Publisher in Windows "Installed apps". Note this is NOT a code-signing
 ; identity and must not be read as one: the release is unsigned, and a publisher
 ; string in an installer is just a label anyone can type.

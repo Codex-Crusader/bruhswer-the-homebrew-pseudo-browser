@@ -404,8 +404,12 @@ def authenticode(exe_path: str) -> Probe[dict[str, Any] | None]:
     private one quietly erodes it.
 
     `exe_path` must be a path bruhswer itself resolved (config.EDGE_CANDIDATES), never
-    anything derived from input.
+    anything derived from input. The quote check enforces that rather than trusting
+    it: a lone quote would close the PowerShell string literal below.
     """
+    if "'" in exe_path or "`" in exe_path:
+        _log.error("refusing to build a signature query from a quoted path")
+        return Probe(None, ProbeStatus.PROBE_ERROR, 0.0, "unquotable path")
     body = (
         "$s = Get-AuthenticodeSignature -LiteralPath '" + exe_path + "'; "
         "[pscustomobject]@{ Status=[string]$s.Status; "

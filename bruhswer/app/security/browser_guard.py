@@ -142,9 +142,10 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         evidence_kind=EvidenceKind.LIVE))
 
     # --- the browser must not be pointed at the user's real profiles ------------
+    local_appdata = config.ROOT.parent
     forbidden_parents = [
-        Path(config.os.environ["LOCALAPPDATA"]) / "Microsoft" / "Edge" / "User Data",
-        Path(config.os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data",
+        local_appdata / "Microsoft" / "Edge" / "User Data",
+        local_appdata / "Google" / "Chrome" / "User Data",
     ]
     # Path ancestry, not string prefix. "User Data-Evil" starts with "User Data" while
     # being a different directory, which made this fail a launch it should have allowed.
@@ -204,13 +205,18 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         evidence_kind=EvidenceKind.INFERENCE))
 
     # --- the boundary that actually exists, stated accurately ---------------------
+    weakening = [flag for flag in found_dangerous
+                 if flag.startswith(("--no-sandbox", "--disable-gpu-sandbox",
+                                     "--disable-site-isolation-trials"))]
     checks.append(Check(
         "browser.sandbox.flags", "Browser started with its sandbox intact",
-        Verdict.PASS, critical=False,
-        detail=("bruhswer never passes --no-sandbox or any flag that weakens the "
-                "renderer sandbox. Whether the sandbox is actually in force is "
-                "measured separately, from the live processes."),
-        evidence="DANGEROUS_FLAGS enforced in edge.build_command",
+        Verdict.PASS if not weakening else Verdict.FAIL, critical=False,
+        detail=("bruhswer passed no flag that weakens the renderer sandbox. "
+                "Whether the sandbox is actually in force is measured separately, "
+                "from the live processes."
+                if not weakening else
+                f"Sandbox-weakening flags on the command line: {weakening}"),
+        evidence=f"weakening={weakening}",
         evidence_kind=EvidenceKind.INFERENCE))
 
     return checks

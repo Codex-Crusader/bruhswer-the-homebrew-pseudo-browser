@@ -6,6 +6,16 @@ Privacy and security are kept separate here on purpose (brief §44). A privacy f
 
 **BRUHWSER makes no absolute privacy claim.** It does not make you impossible to fingerprint, and it does not make you anonymous.
 
+<p align="center">
+  <img src="assets/shot-privacy.png" alt="The Privacy panel: settings read back out of the live profile" width="820">
+</p>
+
+The Privacy panel, as it actually renders. Note two things it is careful about. The
+settings count reads **"21 of 21 confirmed present"** because each one was read back out
+of the profile just now, not because BRUHWSER intended to write it. And the comparison
+rows above it say plainly that they are *"a recorded comparison against stock Edge, not
+a live reading of this profile"* - a past measurement, labelled as one.
+
 ---
 
 ## 1. What websites may learn

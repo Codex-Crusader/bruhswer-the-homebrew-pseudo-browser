@@ -58,7 +58,8 @@ _LOOKS_LIKE_IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?(?:/.*)?$")
 _LOCALHOST = re.compile(r"^localhost(?::\d{1,5})?(?:/.*)?$", re.I)
 
 _FORBIDDEN_SCHEMES = ("file:", "javascript:", "data:", "vbscript:", "blob:",
-                      "chrome:", "edge:", "view-source:", "ftp:", "ws:", "wss:")
+                      "chrome:", "edge:", "about:", "view-source:", "ftp:",
+                      "ws:", "wss:")
 
 
 class RefusedURL(ValueError):

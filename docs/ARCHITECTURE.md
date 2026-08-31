@@ -1,6 +1,6 @@
 # Architecture
 
-**Status: current.** This describes the code that ships in v0.11.0.
+**Status: current.** This describes the code that ships in v0.12.0.
 
 Earlier designs (WSL2, Hyper-V, QEMU) were built, measured, and rejected. They live in
 [`research/`](research/) as evidence and are not guidance. If you want the story of how
@@ -125,6 +125,111 @@ module to execute something arbitrary.
 Paths, brand colours, Edge candidate locations, blocked address ranges, browser flags,
 the dangerous-flag list. Nothing in it is derived from a URL, a filename, a header, a
 downloaded file, or any other browser-controlled input.
+
+#### Why these values are what they are
+
+These are the constants whose value is a finding rather than a preference. The file
+itself carries a one-line note; the reasoning lives here.
+
+**The three palettes.** bruhswer is dark by default, but the dark palette's amber and
+green do not clear WCAG AA (4.5:1) on black. So `apply_high_contrast()` swaps in a
+palette that does when Windows reports high-contrast mode, and `apply_light()` swaps in
+a light one when Windows says the user prefers light apps. The light palette *darkens*
+the verdict hues rather than reusing them - the dark theme's `#3FB950` green is only
+1.9:1 on white. Both switches are one-way and must run before any widget is built,
+because each widget reads its colour once at construction. `tests/test_accessibility.py`
+computes the ratios rather than trusting any of this.
+
+Anything that snapshots the palette at import time has to be refreshed after a switch.
+`chrome.COLOUR` is the one such snapshot, and `chrome.refresh_palette()` updates it in
+place because `browser_window` and `verification_ui` alias that dict.
+
+**`POLICY_STATE_COLOUR`.** One map, keyed by `network_guard.PolicyState`'s *value* so
+`config` need not import the network layer. There used to be two - one in
+`network_panel.py`, one inline in `app_ui.py` - and when `policy_summary()` gained a
+fourth state both `KeyError`'d, taking two UIs offline. An unrecognised state renders
+`POLICY_STATE_UNKNOWN_COLOUR`, which is red: a broken reporting contract is a louder
+problem than any single row's verdict, and amber would quietly normalise it.
+
+**`FILE_ATTRIBUTE_REPARSE_POINT` (0x400).** The single most load-bearing constant in
+the delete and export paths. Measured in this project: `Path.is_symlink()` returns
+**False** for a directory junction created with `mklink /J`, so the obvious-looking
+symlink check is silently inert against the exact thing it appears to defend against.
+The file-attribute test is the one that works.
+
+**`VERIFY_INTERVAL_SECONDS = 60`.** A full pass starts 14 helper processes (13
+PowerShell + 1 icacls) and takes 5.5s measured - re-measured after HostGuard's queries
+were made concurrent, down from 8.31s across 15 processes. That number is what settles
+the design: a Tk `after()` callback doing this would freeze the window for five seconds
+once a minute for the whole session, so it runs on a worker thread. Sixty seconds is
+long enough that the helpers are a rounding error on battery, short enough that a
+control which silently stopped applying surfaces while the user is still in the session
+it affects.
+
+**`FIT_MAX_ATTEMPTS` / `HOST_MAX_ATTEMPTS`.** The curtain drops when the resize is
+*confirmed* landed (`embed.is_fitted`), not on a timer. This replaced fixed
+200/900/950ms delays that were a guess at how long Chromium takes. The attempt caps
+exist because this is a verification, not a wait: if the window is not the right size
+after three rounds, more rounds will not fix it and the curtain must come up anyway
+rather than hang.
+
+**`DISPOSABLE_OVERWRITE_MAX_BYTES` = 8 MiB.** A browser profile's cache routinely runs
+to gigabytes; overwriting all of it would turn closing a session into a multi-minute
+operation, and a user who cancels gets neither the overwrite nor a timely close. The
+files that hold identifying material - Cookies, Login Data, History, Web Data, the
+Local Storage LevelDB - sit far below the cap. Files above it are skipped **and
+counted**, and the count is reported.
+
+**`RULE_PREFIX = "BRUHWSER"`,** deliberately, while the user-facing product name is
+lowercase `bruhswer`. These are genuinely different strings (`WSER` vs `SWER`), so
+renaming would be a migration, not a case change - and the failure mode is that the app
+fails closed on "rule not present" while two perfectly good rules sit on the host under
+the old name, stopping the browser launching for a cosmetic rename.
+
+**`BLOCKED_IPV4`.** Measured effective in Stage 4 gate A16: the router became
+unreachable (`ERR_NETWORK_ACCESS_DENIED`) while the internet stayed up, because traffic
+*routed through* the gateway is not traffic *addressed to* it. `100.64.0.0/10` (CGNAT)
+is deliberately excluded - some ISPs and mobile hotspots put the user's own path to the
+internet inside it, and brief SS19 says not to block ranges legitimate operation
+depends on. `BLOCKED_IPV6` is separate on purpose (SS23): IPv4 rules do not protect
+IPv6.
+
+**`DEV_SERVICE_PORTS`.** Not enforceable, and listed only so the UI can be specific
+about what stays exposed. Windows Firewall does not filter loopback, so no rule stops
+the browser reaching these - measured in gate A16 and confirmed against a live PyCharm
+service.
+
+**`BASE_EDGE_FLAGS`.** Two entries are measurements rather than tidiness. Without the
+`--disable-features` entry, a fresh profile launched with only `--no-first-run` ended
+up on an ad/redirect page ("Redirecting... and 1 more page"); with it, the profile
+opens exactly the page that was asked for. `--disable-sync` was added late, after a
+windowed launch with a brand-new profile signed itself into the Windows account and
+recorded sync consent - a "disposable" profile arriving already carrying the user's
+identity and synced favourites, which made the disposable-session claim materially
+wrong. Measured twice on a fresh profile: without the flag, `account_info=1`, email
+present, `sync_consent=True`; with it, `sync_consent=None`. So it stops the sync. It
+does **not** stop the sign-in - the account record is still written, and no
+command-line switch prevents that. Only machine-wide Edge policy (`BrowserSignin=0`)
+would, and bruhswer refuses to write policy that changes every Edge instance on the PC.
+The residual is reported as `NOT ENFORCEABLE` by
+`privacy_guard.verify_account_signin()`, never hidden.
+
+`--no-sandbox`, `--disable-web-security`, `--ignore-certificate-errors`,
+`--allow-running-insecure-content` and `--disable-site-isolation-trials` are never
+used: they would disable the only real process boundary this architecture has (gate
+A3). They sit in `DANGEROUS_FLAGS`, which `edge.build_command` refuses to launch with.
+
+**There is no IPC, and that is the design.** An earlier iteration reserved a named pipe
+(`\\.\pipe\bruhswer-control`) and a verb allow-list for a channel between the UI and
+the controller. It was never built, because it was never needed - both run in the same
+Python process, so the UI calls `Controller` methods directly and nothing has to be
+serialised, parsed, authenticated or authorised. The reserved constants were deleted
+rather than kept "for later": Stage 4 measured that a compromised browser process can
+reach `127.0.0.1` and that no firewall rule stops it, so any local control endpoint is
+reachable by the exact thing bruhswer exists to contain. A dormant pipe name in config
+is an invitation to implement one; a documented refusal is not.
+`tests/test_security.py` asserts bruhswer's source opens no listening socket and no
+named pipe at all.
 
 ### `verdict.py` - the vocabulary
 

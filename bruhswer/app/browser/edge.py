@@ -51,6 +51,7 @@ _log = get_logger("edge")
 #     no call path that lets a caller choose the value.
 BLANK = "about:blank"
 PROFILES_SETTINGS = "edge://settings/profiles"
+_DISABLE_FEATURES = "--disable-features="
 
 _ALLOWED_NON_HTTP = (BLANK, PROFILES_SETTINGS)
 
@@ -182,6 +183,25 @@ def _update_in_progress_signs(edge_path: Path) -> list[str]:
     return signs
 
 
+def _merge_disable_features(argv: list[str]) -> list[str]:
+    """Collapse repeated --disable-features switches into one, order preserved.
+
+    Chromium keeps a single value per switch name, so emitting the switch twice
+    discards one set entirely rather than combining them.
+    """
+    features: list[str] = []
+    out: list[str] = []
+    for arg in argv:
+        if arg.startswith(_DISABLE_FEATURES):
+            features.extend(name for name
+                            in arg[len(_DISABLE_FEATURES):].split(",") if name)
+        else:
+            out.append(arg)
+    if features:
+        out.append(_DISABLE_FEATURES + ",".join(dict.fromkeys(features)))
+    return out
+
+
 def build_command(edge_path: Path, profile_dir: Path, extra_flags: tuple[str, ...],
                   url: str | None = None) -> list[str]:
     """Build the argv list. Explicit list, never a string, never a shell.
@@ -198,6 +218,8 @@ def build_command(edge_path: Path, profile_dir: Path, extra_flags: tuple[str, ..
         for bad in config.DANGEROUS_FLAGS:
             if flag.startswith(bad):
                 raise ValueError(f"refusing to launch with {bad}")
+
+    argv = _merge_disable_features(argv)
 
     if url:
         # EXACT membership, never a prefix test. `url.startswith(PROFILES_SETTINGS)`

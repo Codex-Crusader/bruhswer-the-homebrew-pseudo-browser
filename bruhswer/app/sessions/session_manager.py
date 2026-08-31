@@ -83,7 +83,7 @@ def create(mode: str) -> Session:
     if mode == PERSISTENT:
         profile = config.PROFILE_PERSISTENT
         profile.mkdir(parents=True, exist_ok=True)
-        session_id = "persistent00000"[:16].ljust(16, "0")
+        session_id = "persistent000000"
         _log.info("opened persistent session")
         return Session(PERSISTENT, session_id, profile, now)
 

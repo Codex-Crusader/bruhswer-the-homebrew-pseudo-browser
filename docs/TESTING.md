@@ -113,6 +113,17 @@ found only by running it as a person:
 | **Startup flashed a stream of console windows**, one per PowerShell query | Tests never *watched the screen* |
 | **The page rendered at the wrong scale.** Tk is DPI-unaware, Edge is per-monitor aware | Same |
 
+Four more were caught by the suite only after a test was written that had never existed,
+which is the same lesson from the other side - each had been passing for as long as it
+had been wrong:
+
+| Defect | Why no test saw it |
+|---|---|
+| **The download directory was set with `--download-directory=`, which is not a real Chromium switch.** Edge ignored it and files went to the user's real Downloads folder | No test had ever downloaded a file, so nothing observed where one landed. It is a profile preference now, read back and verified at every launch |
+| **Destroying a disposable session reported "destroyed and verified gone" while leaving every file downloaded during that session on disk forever**, invisible to the UI | The deletion test checked the profile directory. Nothing checked the quarantine directory beside it |
+| **The renderer sandbox check was a hardcoded `PASS`** quoting a measurement from one machine and one Edge build | A constant cannot fail. It is measured from the live process tokens now |
+| **`icacls /inheritance:r` with `/T` silently made the profile unreadable while returning exit code 0** | The test asserted the exit code. A zero exit code is not evidence, so there is a real read/write probe after it now |
+
 And later, in this same pass:
 
 | Defect | Found by |

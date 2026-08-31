@@ -169,6 +169,23 @@ def settings_for(mode: str) -> tuple[PrivacySetting, ...]:
     return STANDARD + MAXIMUM_EXTRA if mode == "maximum" else STANDARD
 
 
+def _write_prefs(prefs_path: Path, prefs: dict) -> bool:
+    """Replace Preferences atomically. False if the filesystem refused.
+
+    Never raises: the callers run inside Controller.start(), which has no handler,
+    and the read-back checks are what report a write that did not land.
+    """
+    tmp = prefs_path.with_suffix(".bruhswer-tmp")
+    try:
+        tmp.write_text(json.dumps(prefs, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(prefs_path)
+    except OSError as exc:
+        _log.error("could not write Preferences: %s", exc.__class__.__name__)
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def _assign(tree: dict, dotted: str, value: object) -> None:
     parts = dotted.split(".")
     node = tree
@@ -202,9 +219,8 @@ def apply_to_profile(profile_dir: Path, mode: str) -> int:
     for setting in chosen:
         _assign(prefs, setting.key, setting.value)
 
-    tmp = prefs_path.with_suffix(".bruhswer-tmp")
-    tmp.write_text(json.dumps(prefs, separators=(",", ":")), encoding="utf-8")
-    tmp.replace(prefs_path)
+    if not _write_prefs(prefs_path, prefs):
+        return 0
     _log.info("applied %d privacy settings in %s mode", len(chosen), mode)
     return len(chosen)
 
@@ -241,10 +257,8 @@ def apply_download_directory(profile_dir: Path, download_dir: Path) -> None:
     _assign(prefs, "download.directory_upgrade", True)
     _assign(prefs, "savefile.default_directory", target)
 
-    tmp = prefs_path.with_suffix(".bruhswer-tmp")
-    tmp.write_text(json.dumps(prefs, separators=(",", ":")), encoding="utf-8")
-    tmp.replace(prefs_path)
-    _log.info("download directory pointed at quarantine")
+    if _write_prefs(prefs_path, prefs):
+        _log.info("download directory pointed at quarantine")
 
 
 def verify_download_directory(profile_dir: Path, download_dir: Path) -> tuple[bool, str]:
