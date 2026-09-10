@@ -1,25 +1,17 @@
 """NetworkGuard — verifies the browser's network policy. Never applies it.
 
-Division of responsibility, and it is deliberate:
+APPLYING firewall rules needs Administrator and lives in the elevated one-shot
+`tools/bruhswer-netpolicy.ps1`, which the user runs knowingly, with a rollback.
+VERIFYING them does not, and is this module, running unelevated.
 
-  - APPLYING firewall rules needs Administrator. That lives in the elevated one-shot
-    `tools/bruhswer-netpolicy.ps1`, which the user runs knowingly, with a rollback.
-  - VERIFYING them does not. That is this module, and it runs unelevated, which is how
-    bruhswer normally runs (brief SS16).
+Measured (gate A16/A17): a -Program scoped outbound Block rule stops Edge reaching the
+router - REACHED -> BLOCKED -> REACHED, ERR_NETWORK_ACCESS_DENIED - while the internet
+stays up and other programs are unaffected, and the browser-process token cannot
+create, delete or disable those rules without elevation.
 
-The mechanism this rests on is the strongest thing Stage 4 measured:
-
-  A16 PASS  a -Program scoped outbound Block rule stops Edge reaching the router
-            (REACHED -> BLOCKED -> REACHED, ERR_NETWORK_ACCESS_DENIED) while the
-            internet stays up and other programs are unaffected.
-  A17 PASS  the browser-process token CANNOT create, delete or disable those rules --
-            both the NetSecurity cmdlets and netsh refuse without elevation.
-
-And the limit, which is stated just as loudly:
-
-  A16 FAIL  rules explicitly naming 127.0.0.1 and the host's own LAN IP did NOT block
-            Edge. Windows Firewall does not filter loopback. No configuration fixes
-            this, so localhost protection is reported NOT ENFORCEABLE, never as OK.
+The limit, stated just as loudly: rules explicitly naming 127.0.0.1 and the host's own
+LAN IP did NOT block Edge. Windows Firewall does not filter loopback and no
+configuration fixes it, so localhost protection is reported NOT ENFORCEABLE, never OK.
 
 This is not a VM boundary and this module must never imply that it is.
 """
@@ -40,18 +32,14 @@ _log = get_logger("network")
 class PolicyState(enum.Enum):
     """What bruhswer can say about one row of network policy.
 
-    A TYPE, not a display string, and the difference was a real defect.
+    A TYPE, not a display string, and the difference was a real defect. When
+    policy_summary() returned prose that each UI pattern-matched against its own
+    hard-coded colour dict, the IPv6 row correctly dropping its "BLOCKED" claim made
+    network_panel.py raise KeyError and the panel vanish. Every unit test passed,
+    because nothing tied the producing module to the consuming ones.
 
-    policy_summary() used to return prose, and each UI pattern-matched that prose
-    against its own hard-coded colour dict. When the IPv6 row stopped claiming
-    "BLOCKED" - correctly, because its effect was never measured - both dicts missed
-    the new string. `panels/network_panel.py` raised KeyError and the Network panel
-    vanished entirely; `app_ui.py` would have done the same to the --panel UI. A change
-    made to stop bruhswer overclaiming took two screens offline instead, and every unit
-    test passed, because nothing tied the producing module to the consuming ones.
-
-    Security meaning must not depend on matching prose. The enum carries the MEANING;
-    each UI maps meaning to colour, and a test asserts every member has one.
+    The enum carries the MEANING; each UI maps meaning to colour, and a test asserts
+    every member has one.
     """
 
     ALLOWED = "ALLOWED"
@@ -323,21 +311,15 @@ def _platform_limits() -> list[Check]:
 def policy_summary() -> list[tuple[str, PolicyState]]:
     """What the policy actually is, for the UI. No claim beyond what was measured.
 
-    The IPv6 row is deliberately NOT "BLOCKED", and the difference from the IPv4 rows
-    is the whole point of this docstring.
+    The IPv6 row is deliberately NOT "BLOCKED". Every other "BLOCKED" rests on gate
+    A16, which measured the effect empirically; nothing equivalent was ever run for
+    IPv6. The rule is present and correctly formed, which is what `verify()` checks and
+    passes honestly - but that is a different claim from "the browser cannot reach
+    fc00::/7", and this table was making the second on the strength of the first.
 
-    Every other "BLOCKED" here rests on gate A16, which measured the effect
-    EMPIRICALLY: the router went from REACHED to BLOCKED to REACHED again as the rule
-    was applied and removed, with ERR_NETWORK_ACCESS_DENIED in the browser. Nothing
-    equivalent was ever run for IPv6. The rule is present and correctly formed - that
-    is what `verify()` above checks, and it PASSES honestly - but "a correctly formed
-    Block rule exists" and "the browser cannot reach fc00::/7" are different claims,
-    and this table was making the second one on the strength of the first.
-
-    bruhswer also cannot close the gap from here. The rules are `-Program` scoped to
-    msedge.exe, so a probe sent from bruhswer's own process would measure nothing about
-    Edge - the identical error that made the original localhost claim wrong - and
-    `app/` is forbidden from importing `socket` at all (tests/test_security.py).
+    The gap cannot be closed from here: the rules are `-Program` scoped to msedge.exe,
+    so a probe from bruhswer's own process would measure nothing about Edge, and `app/`
+    is forbidden from importing `socket` at all.
     """
     return [
         ("Internet", PolicyState.ALLOWED),

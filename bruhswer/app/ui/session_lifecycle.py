@@ -1,14 +1,11 @@
 """Session lifecycle for the browser window: startup, hosting, teardown.
 
-Split out of browser_window.py, which had grown to a thousand lines covering three
-unrelated jobs. This half owns everything from "verify, then launch" through hosting
-Edge inside the frame to destroying the session.
+Split out of browser_window.py. This half owns everything from "verify, then launch"
+through hosting Edge inside the frame to destroying the session.
 
-A MIXIN, not a collaborator object, and that is deliberate. These methods are woven
-through BrowserWindow's own state - `hosted_hwnd`, `_host_attempts`, `root`, `stage`,
-`_jobs` - and tests/test_browser_ui.py drives them as methods on the window. Extracting
-a separate object would have meant either passing the window into it (the same coupling
-with an extra indirection) or changing the surface the tests pin.
+A MIXIN, not a collaborator object: these methods are woven through BrowserWindow's own
+state and the tests drive them as methods on the window, so extracting an object would
+mean either passing the window into it or changing the surface the tests pin.
 """
 
 from __future__ import annotations
@@ -27,14 +24,12 @@ class SessionLifecycleMixin(WindowShell):
     """Startup, window hosting and teardown. Mixed into BrowserWindow."""
 
     def startup(self) -> None:
-        """Verify first. The browser only appears if the checks allow it (SS9).
+        """Verify first. The browser only appears if the checks allow it.
 
-        A full pass starts 14 helper processes and takes 5.5s, measured. Run
-        synchronously on the Tk thread this froze the window for that long on every
-        launch, with the status text below never actually painting before the freeze
-        started - Tk does not repaint until control returns to the event loop, and
-        nothing did until the freeze was already over. Routed through _verify_async so
-        the message is on screen and the window stays responsive while this runs.
+        A full pass takes 5.5s measured. Run on the Tk thread it froze the window for
+        that long on every launch, and the status text below never painted first - Tk
+        does not repaint until control returns to the event loop. Routed through
+        _verify_async so the message is on screen and the window stays responsive.
         """
         # Armed BEFORE verification, so a blocked launch - the state where an escape
         # hatch matters most - still shows the panic key's true state.
@@ -111,16 +106,11 @@ class SessionLifecycleMixin(WindowShell):
         # every check once a minute and this window redraws from whatever it finds -
         # including downgrading a light that was green at launch.
         self._start_reverification()
-        # Original value, restored after an experiment. It was shortened to 250ms and a
-        # blank grey stage under a "WE GOOD" status was seen shortly afterwards, so the
-        # change was blamed and reverted. That attribution was NOT established:
-        # find_browser_window costs a ~258ms PowerShell round trip per attempt, which is
-        # far longer than the ~52ms it takes Chromium's compositor to appear, so no poll
-        # interval can actually race it. The blank stage was seen while several bruhswer
-        # instances were running at once, and its cause is still unknown.
-        #
-        # 1200ms stays because it is the value the shipped, working builds have used,
-        # not because the alternative was proven bad.
+        # 1200ms because it is what the shipped, working builds use - not because the
+        # 250ms alternative was proven bad. A blank stage seen after that experiment
+        # was blamed on it, but find_browser_window costs a ~258ms round trip per
+        # attempt against a ~52ms compositor, so no poll interval can race it. That
+        # blank stage happened with several bruhswer instances running; cause unknown.
         self._after(1200, self._try_host)
 
     def _try_host(self) -> None:
@@ -235,16 +225,12 @@ class SessionLifecycleMixin(WindowShell):
             # values, so a stale one here means a later stop() can post WM_CLOSE to
             # whatever unrelated window inherited the number.
             self.controller.set_hosted_window(None)
-            # The hosted WINDOW is gone. That is not the same fact as the browser
-            # having closed: a session whose window was reparented or replaced is
-            # still running, still under policy, and still holding a profile.
-            #
-            # But is_running() is a ~258ms PowerShell snapshot, and on an ordinary
-            # close it is taken while Edge is still tearing down, so it will often
-            # still see processes. Reporting "still open and still protected" and
-            # then never asking again would latch exactly the kind of false
-            # reassurance this branch exists to avoid, so KEEP POLLING either way and
-            # let the message correct itself.
+            # The hosted WINDOW being gone is not the same fact as the browser having
+            # closed. But is_running() is a ~258ms snapshot taken while Edge is still
+            # tearing down, so it will often still see processes - latching "still
+            # open and still protected" would be the false reassurance this branch
+            # exists to avoid. Keep polling either way and let the message correct
+            # itself.
             if self.controller.is_running():
                 self._show_curtain(
                     "The browser is no longer inside bruhswer's frame.\n\n"
@@ -280,14 +266,12 @@ class SessionLifecycleMixin(WindowShell):
     def _on_panic(self) -> None:
         """The panic key fired. Stop this session's browser at once.
 
-        ONE-SHOT. A held or repeated key press must not start a second teardown while
-        the first is still running - two concurrent destroy() passes over the same
-        profile would race each other and produce a report neither of them can stand
-        behind.
+        ONE-SHOT: a held key must not start a second teardown, or two destroy() passes
+        race over the same profile and produce a report neither can stand behind.
 
-        No confirmation, and no download-export prompt. Panic means panic, and this is
-        the one path that knowingly destroys a disposable session's unexported
-        quarantine. That is stated where the key is documented, not sprung afterwards.
+        No confirmation and no export prompt. Panic means panic, and this is the one
+        path that knowingly destroys a disposable session's unexported quarantine -
+        stated where the key is documented, not sprung afterwards.
         """
         if self._panic_fired:
             return
@@ -355,10 +339,9 @@ class SessionLifecycleMixin(WindowShell):
     def _reattach_input(self) -> None:
         """Give keyboard input back to the hosted browser after a cancelled close.
 
-        Needed because the confirmation dialog is shown AFTER detach_input(). If the
-        user chooses to keep the session, bruhswer must put the shared input queue
-        back or they are returned to a browser window that renders fine and swallows
-        every keystroke - the exact defect that AttachThreadInput was added to fix.
+        The confirmation dialog is shown AFTER detach_input(), so keeping the session
+        must put the shared input queue back - otherwise the user returns to a browser
+        window that renders fine and swallows every keystroke.
         """
         if self.hosted_hwnd and embed.is_alive(self.hosted_hwnd):
             embed.attach_input(self.hosted_hwnd, self.root.winfo_id())

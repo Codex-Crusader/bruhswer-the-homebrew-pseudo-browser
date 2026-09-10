@@ -3,22 +3,14 @@
 A real browser: a hosted Edge window with its own tabs, back/forward and reload, wrapped
 in bruhswer's frame, address bar, security chrome and session lifecycle.
 
-WHAT THIS LAYER DOES AND DOES NOT DO
-    It is presentation and interaction only. Every security decision still belongs to
-    SecurityVerifier, BrowserGuard, NetworkGuard, PrivacyGuard, HostGuard and
-    SessionManager. This file never re-implements a check, never decides whether launch
-    is allowed, and never manages a session itself (brief SS4, SS14, SS15).
+Presentation and interaction only. Every security decision belongs to the guards and
+SessionManager; this file never re-implements a check, decides whether launch is
+allowed, or manages a session. Tabs, back, forward and reload are Edge's own controls
+inside the hosted window, not reimplementations and not fake tabs that swap a URL.
 
-    Tabs, back, forward and reload are Edge's own native controls inside the hosted
-    window - not reimplementations, and not fake tabs that swap a URL in one page
-    (brief SS8). bruhswer's address bar adds a second entry point that opens a real new
-    tab in the running session.
-
-HONESTY RULES BAKED INTO THIS FILE
-    A status light is only green if a check actually returned PASS. LOCALHOST is
-    permanently amber and reads NOT ENFORCEABLE, because Windows Firewall cannot filter
-    loopback and no configuration changes that. VPN reads UNSUPPORTED. Humour never
-    replaces a security fact (brief SS30).
+A status light is only green if a check returned PASS. LOCALHOST is permanently amber
+and reads NOT ENFORCEABLE, because Windows Firewall cannot filter loopback. VPN reads
+UNSUPPORTED. Humour never replaces a security fact.
 """
 
 from __future__ import annotations
@@ -67,12 +59,9 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self._verifier = VerifyWorker()
         self._drain_job: str | None = None
         self._closing = False
-        # One-shot verification (startup, BRUH CHECK) used to be synchronous, which
-        # accidentally serialised repeat clicks by freezing the window for their
-        # duration. Now that it does not freeze the window, a second click while the
-        # first pass is still running must be refused explicitly, or two overlapping
-        # startup() calls can each decide to open a session and race each other's
-        # controller.stop()/start(). See _verify_async.
+        # A synchronous one-shot pass used to serialise repeat clicks by accident, by
+        # freezing the window. Without that freeze, two overlapping startup() calls can
+        # each decide to open a session and race each other's stop()/start().
         self._verify_in_flight = False
         # check_ids currently named in a regression warning, so the warning can be
         # withdrawn once every one of them verifies again.
@@ -83,12 +72,9 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         # why a Tk-level binding cannot do this job.
         self._panic_hotkey = panic_key.PanicHotkey()
         self._panic_fired = False
-        # EVERY pending `after` id. on_close() used to cancel only _watch_job, leaving
-        # the _try_host / _fit_hosted / _reveal_stage / startup timers armed against a
-        # root that was about to be destroyed - which is where
-        #     invalid command name "..._watch"  ("after" script)
-        # came from in the browser-UI suite. Cancelling one of six timers is not
-        # teardown. Every schedule goes through _after() and lands in here.
+        # EVERY pending `after` id - cancelling one of six timers is not teardown, and
+        # the rest fired against a destroyed root as `invalid command name ..._watch`.
+        # Every schedule goes through _after() and lands here.
         self._jobs: set[str] = set()
 
         # Declared here so the full set of instance state is visible in one place.
@@ -129,19 +115,10 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._build()
-        # Cancel every pending `after` job the moment the window is destroyed, by ANY
-        # route - not just through on_close().
-        #
-        # OBSERVED, in the browser-UI suite's relaunch step:
-        #     invalid command name "2436724324992_watch"  ("after" script)
-        # A queued callback was dispatched after the interpreter had gone. on_close()
-        # cancels the jobs, but anything that calls root.destroy() directly - a test, a
-        # harness, a fatal dialog path - skips that and leaves them armed. The guards
-        # inside _watch/_drain cannot help: Tk fails to dispatch before any Python in
-        # them runs.
-        #
-        # It printed a Tk error without failing anything, which is the worst kind of
-        # noise: it trains the reader to skip errors in this suite's output.
+        # Cancel pending jobs on destruction by ANY route, not just on_close(): a test,
+        # a harness or a fatal dialog path can call root.destroy() directly and leave
+        # them armed. The guards inside _watch/_drain cannot help - Tk fails to
+        # dispatch before any Python in them runs.
         self.root.bind("<Destroy>", self._on_destroy)
         self._after(120, self.startup)
 
@@ -151,12 +128,10 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         Returns the job id, so the few callers that also track a job in a named
         attribute (_watch_job, _drain_job) keep working unchanged.
 
-        `_jobs` used to only ever grow: nothing removed a completed job's id, so
-        `_watch` and `_drain` - both self-rescheduling for the life of the session -
-        added roughly 19,000 dead entries per hour. `_cancel_all_jobs` then had to walk
-        every one of them at teardown, calling `after_cancel` on ids Tk had long since
-        discarded. The callback is wrapped so a completed job removes its own id before
-        the caller's code runs, whether or not it reschedules a new one.
+        `_jobs` used to only grow - `_watch` and `_drain` reschedule themselves for the
+        life of the session, adding ~19,000 dead entries an hour. The callback is
+        wrapped so a completed job removes its own id before the caller's code runs,
+        whether or not it reschedules.
         """
         job_id: list[str] = []
 

@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.12.1-F5C518?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.12.2-F5C518?style=flat-square">
   <img alt="status" src="https://img.shields.io/badge/status-research--grade%20beta-F5C518?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-333?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-322%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-329%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -149,7 +149,7 @@ which commit and workflow produced the binary rather than trusting the checksum 
 to have been written honestly:
 
 ```powershell
-gh attestation verify bruhswer-0.12.1-setup.exe `
+gh attestation verify bruhswer-0.12.2-setup.exe `
   --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
 ```
 
@@ -220,7 +220,7 @@ what is about to go, so you can export it. It will not quietly bin your download
 | [Architecture](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [Security model](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [Limitations](docs/LIMITATIONS.md) | Every measured boundary - the honest part |
-| [Testing](docs/TESTING.md) | What the 322 assertions prove, and what they missed |
+| [Testing](docs/TESTING.md) | What the 329 assertions prove, and what they missed |
 | [Security testing](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [Network & privacy](docs/NETWORK-PRIVACY.md) · [Data inventory](docs/DATA-INVENTORY.md) | What leaves the machine, and what is stored where |
 | [Roadmap](docs/ROADMAP.md) | What is planned, and what is refused |
@@ -231,8 +231,8 @@ what is about to go, so you can export it. It will not quietly bin your download
 
 ## Status
 
-**v0.12.1 - research-grade beta, deliberately.** The controls it claims are measured and
-322 assertions across 17 suites pass against a real browser, a real firewall and a real
+**v0.12.2 - research-grade beta, deliberately.** The controls it claims are measured and
+329 assertions across 17 suites pass against a real browser, a real firewall and a real
 network. What keeps it below 1.0 is not unfinished code, it is unfinished *evidence*:
 releases are unsigned, builds are not reproducible, and every measurement here was taken
 by the author with no third-party audit. The [roadmap](docs/ROADMAP.md) tracks each one.

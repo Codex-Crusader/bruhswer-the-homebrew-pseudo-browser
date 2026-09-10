@@ -40,30 +40,20 @@ class VerificationUIMixin(WindowShell):
         thread. For a SINGLE pass - `startup()` and the BRUH CHECK panel - not for the
         ongoing re-verification loop, which is `self._verifier` (VerifyWorker) below.
 
-        Deliberately its own thread rather than routed through `self._verifier`: that
-        object owns the ongoing loop's regression baseline (`_previous`), and folding a
-        one-shot pass into it would make that pass silently become the baseline the
-        session's first LIVE pass gets diffed against.
+        Its own thread rather than `self._verifier`, which owns the ongoing loop's
+        regression baseline: folding a one-shot pass in would make it the baseline the
+        session's first live pass gets diffed against.
 
-        `verification_request()` builds the request; per its own docstring it MUST run
-        on the Tk thread, and does - only `run_verification()`, which touches no shared
-        state, crosses the thread boundary. This is the same split VerifyWorker uses
-        internally, applied once instead of on a timer.
+        `verification_request()` MUST run on the Tk thread and does; only
+        `run_verification()`, which touches no shared state, crosses the boundary. A
+        raised background thread reports through `_log.exception` and skips `on_done`
+        with a status message, rather than leaving "Running security verification..."
+        standing forever.
 
-        A raised background thread must not vanish silently: it reports through
-        `_log.exception`, exactly as `VerifyWorker._run_once` does for the ongoing
-        loop, and `on_done` is skipped with a status message rather than leaving the
-        caller's "Running security verification..." text standing forever.
-
-        REFUSES A SECOND CALL WHILE ONE IS ALREADY RUNNING. The old synchronous
-        `controller.verify()` accidentally serialised repeat clicks by freezing the
-        window for the whole pass - the "Check again" button on a blocked-launch
-        curtain could not physically be double-clicked. Making this async removed
-        that accident without replacing it: two overlapping `startup()` calls would
-        each build their own request, each eventually decide independently whether to
-        open a session, and the second's `controller.stop()` would tear down whatever
-        the first had just started. `_verify_in_flight` is the explicit version of the
-        serialisation the freeze used to provide for free.
+        REFUSES A SECOND CALL WHILE ONE IS RUNNING. The old synchronous version
+        serialised repeat clicks by accident, by freezing the window; without that,
+        two overlapping `startup()` calls each decide whether to open a session and the
+        second's `controller.stop()` tears down what the first started.
         """
         if self._verify_in_flight:
             self.set_status("Security verification is already running.")
@@ -105,17 +95,13 @@ class VerificationUIMixin(WindowShell):
     def _arm_panic_key(self) -> None:
         """Register the panic hotkey and show its REAL state, persistently.
 
-        Called from startup, not from the launch success path. Tying it to a
-        successful launch meant that a blocked launch - the state where a user is most
-        likely to want an escape hatch - left the key unregistered with nothing on
-        screen saying so.
+        From startup, not the launch success path: tying it to a successful launch left
+        a blocked launch - where an escape hatch matters most - with the key
+        unregistered and nothing saying so.
 
-        The result goes to a permanent indicator rather than the status line. The
-        status line is overwritten within a second by the launch sequence ("WE GOOD"
-        at 950ms), so a user whose Ctrl+Shift+End is owned by another application
-        would have seen "UNAVAILABLE" flash past and be replaced by reassurance. That
-        is exactly the failure this module's docstring warns about: believing in an
-        escape hatch and discovering otherwise at the moment it is needed.
+        A permanent indicator, not the status line, which the launch sequence
+        overwrites within a second. "UNAVAILABLE" would have flashed past and been
+        replaced by reassurance.
         """
         self._panic_fired = False
         self._panic_hotkey.start()
@@ -208,19 +194,11 @@ class VerificationUIMixin(WindowShell):
     def _refresh_account_banner(self) -> None:
         """Show or hide the Microsoft-account banner from the LATEST measurement.
 
-        STATE-DRIVEN, and deliberately not wired to the regression path. Two reasons
-        it could not be:
-
-          1. `privacy.account` is reported with enforceable=False, and
-             verify_worker._comparable() excludes unenforceable checks - correctly, so
-             that the permanently-FAIL net.loopback does not fire a warning every
-             cycle. This check would be excluded with it.
-          2. Even if it were included, the transition is UNKNOWN ("no profile yet" at
-             launch) -> FAIL once Edge signs itself in. find_regressions only reports
-             PASS -> not-PASS, so that transition is invisible to it.
-
-        So the banner reads the current verdict directly, every pass, and appears and
-        disappears with the measurement rather than with a transition.
+        STATE-DRIVEN, and it could not be wired to the regression path: `privacy.account`
+        is enforceable=False, which _comparable() excludes so permanently-FAIL
+        net.loopback does not warn every cycle; and its transition is UNKNOWN -> FAIL,
+        which find_regressions does not report. So the banner reads the current verdict
+        directly every pass, appearing with the measurement rather than a transition.
         """
         if self.result is None:
             return
@@ -267,11 +245,9 @@ class VerificationUIMixin(WindowShell):
     def _clear_regression_warning(self, update) -> None:
         """Take the warning back when every control it named is verifying again.
 
-        Needed because a warning with no way to withdraw it is its own kind of false
-        indicator. One failed PowerShell query flips a check to UNKNOWN for a single
-        cycle; the next cycle succeeds and it is PASS again. Since only PASS ->
-        not-PASS is ever reported, nothing would arrive to remove the red curtain, and
-        the user would be told something changed long after it had changed back.
+        A warning with no way to withdraw it is its own false indicator: one failed
+        PowerShell query flips a check to UNKNOWN for a cycle, and since only PASS ->
+        not-PASS is reported, nothing would arrive to remove the curtain.
         """
         if not self._warned_ids:
             return
@@ -309,11 +285,10 @@ class VerificationUIMixin(WindowShell):
     def _warn_regressions(self, regressions: tuple[tuple[str, str], ...]) -> None:
         """A control that was verified at launch no longer verifies.
 
-        bruhswer WARNS; it does not close the session by itself. That is deliberate.
-        A verification pass can go non-PASS because a PowerShell query timed out under
-        load, and auto-killing the browser on a measurement error would destroy a
-        disposable session's unexported downloads over a transient. The user is told
-        precisely what changed and given the action; the decision stays theirs.
+        bruhswer WARNS; it does not close the session itself. A pass can go non-PASS
+        because a query timed out under load, and auto-killing the browser on a
+        measurement error would destroy a disposable session's unexported downloads
+        over a transient. The user is told what changed; the decision stays theirs.
         """
         self._warned_ids |= {check_id for check_id, _title in regressions}
         self._refresh_regression_banner()
@@ -344,16 +319,9 @@ class VerificationUIMixin(WindowShell):
         self._panic_hotkey.stop()
         self._reset_verification_state()
 
-        # REFRESH THE INDICATOR HERE, not in each caller. This method is what
-        # unregisters the hotkey, so it is what owes the user an honest light.
-        #
-        # close_session() called this and then never touched the PANIC light, so after
-        # closing a session the dot stayed green and the hint still read
-        # "Ctrl+Shift+End" while the listener was gone - a status light promising an
-        # escape hatch that would do nothing if pressed. _on_panic() happened to get
-        # this right, which is exactly how the inconsistency survived: the correct
-        # behaviour lived in one caller instead of in the operation itself.
-        #
+        # Here, not in each caller: this method unregisters the hotkey, so it is what
+        # owes the user an honest light. close_session() used to leave the PANIC dot
+        # green with the hint still reading Ctrl+Shift+End while the listener was gone.
         # Skipped while closing, where the widgets are about to be destroyed anyway.
         if not self._closing:
             self._refresh_panic_indicator()

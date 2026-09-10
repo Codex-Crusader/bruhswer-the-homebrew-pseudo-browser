@@ -3,18 +3,15 @@
     python tools/hash_manifest.py            # check, exit 1 on mismatch
     python tools/hash_manifest.py --write    # regenerate
 
-The manifest is what `app/security/integrity.py` compares against at startup. It covers
-EVERY .py file under `app/`, not a curated "security-relevant" subset - see that
-module's docstring for why a subset would be a green light covering a fraction of what
-actually runs in the process.
+What `app/security/integrity.py` compares against at startup. Covers EVERY .py file
+under `app/`, not a curated subset - see that module for why.
 
-RELEASE STEP: regenerate this immediately before building the installer, after the last
-source change. A manifest generated too early ships a build that reports FAIL on a
-perfectly good install, which trains the user to ignore the one indicator that would
-have told them their copy was damaged.
+RELEASE STEP: regenerate immediately before building the installer, after the last
+source change. A manifest generated too early ships a build that reports FAIL on a good
+install, which trains the user to ignore the one indicator that matters.
 
-This tool is NOT part of the trusted stack at runtime. bruhswer never invokes it; it is
-a build-time utility, and `app/` does not import it.
+Not part of the trusted stack at runtime: bruhswer never invokes it and `app/` does not
+import it.
 """
 
 from __future__ import annotations
@@ -60,7 +57,11 @@ def _write() -> int:
 def _check() -> int:
     report = integrity.check_tree()
     if not report.manifest_present:
-        print(f"NO MANIFEST at {integrity.MANIFEST_PATH}")
+        if report.manifest_unreadable:
+            print(f"MANIFEST UNREADABLE at {integrity.MANIFEST_PATH}")
+            print("The file is there and could not be parsed as one.")
+        else:
+            print(f"NO MANIFEST at {integrity.MANIFEST_PATH}")
         print("Run with --write to create one.")
         return 1
 

@@ -1,25 +1,15 @@
 """The state and the cross-half calls that BrowserWindow's two mixins share.
 
-WHY THIS FILE EXISTS
-    browser_window.py was split into three: layout/actions here in BrowserWindow,
-    startup/hosting/teardown in session_lifecycle.py, and the verification display in
-    verification_ui.py. The two halves are mixins woven into one object, so they freely
-    use `self.root`, `self.controller`, `self.set_status(...)` - attributes and methods
-    that BrowserWindow.__init__ creates and that the mixin's own file never mentions.
+browser_window.py is split three ways - layout/actions in BrowserWindow, startup and
+teardown in session_lifecycle.py, verification display in verification_ui.py - and the
+halves are mixins woven into one object, so they freely use `self.root`,
+`self.controller` and `self.set_status(...)` without ever declaring them. That works at
+runtime and left 149 unresolved references to static checkers, which is the noise a
+genuine typo in a teardown path would have hidden in.
 
-    That works at runtime and is unreadable to every static checker: 90 unresolved
-    references in session_lifecycle.py and 59 in verification_ui.py. Those warnings are
-    not cosmetic. They are the noise that hides a REAL unresolved reference - a genuine
-    typo in a teardown path would have sat in that list indistinguishable from the 149
-    false ones.
-
-    So the shared surface is declared once, here, and both mixins inherit it. The
-    annotations give the checker the types; the method stubs give it the signatures.
-
-WHY THE STUBS RAISE
-    A stub that returned None would let a half-wired mixin fail silently at runtime.
-    Every one of these is overridden - by BrowserWindow itself or by the other mixin -
-    and tests/test_window_surface.py asserts that none survives on the assembled class.
+The stubs raise rather than returning None so a half-wired mixin cannot fail silently.
+Every one is overridden, and tests/test_window_surface.py asserts none survives on the
+assembled class.
 """
 
 from __future__ import annotations

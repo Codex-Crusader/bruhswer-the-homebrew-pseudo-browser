@@ -2,62 +2,39 @@
 
     python tests/test_localhost_surface.py
 
-WHAT THIS SUITE IS FOR
+Every other network test asks "is the boundary holding?". This one asks "what can a
+webpage still reach on this machine, and does bruhswer describe that honestly?"
 
-Every other network test in bruhswer asks "is the boundary holding?". This one asks a
-harder and more uncomfortable question: "what can a webpage still reach on this
-machine, and does bruhswer describe that honestly?"
+So it does NOT force every result into PASS. Windows Firewall does not filter loopback
+and no configuration changes that, so a suite reporting "localhost BLOCKED" would be
+lying. Results are REACHED, BLOCKED, NOT ENFORCEABLE (reached, and bruhswer has no
+mechanism that could stop it) or UNKNOWN.
 
-It therefore does NOT force every result into PASS. Stage 4 gate A16 measured that
-Windows Firewall does not filter loopback, and no amount of configuration changes that.
-A suite that reported "localhost BLOCKED" would be lying, and a lying security test is
-worse than no test at all. So results are reported in four categories:
+The verdict rests on three things bruhswer genuinely controls, not on whether loopback
+is reachable: it creates no local endpoint of its own, it refuses the URL schemes that
+would bypass its controls (both section A), and what it CLAIMS matches what was just
+measured (section D). Section D is the point of the file - a future change that made
+loopback reachable in a new way fails the suite because the UI would then be untrue,
+not because the platform moved.
 
-    REACHED          the browser got through, measured
-    BLOCKED          the browser was stopped, measured
-    NOT ENFORCEABLE  reached, and bruhswer has no mechanism that could stop it
-    UNKNOWN          the probe could not establish either way
+Reachability is measured by SERVER-SIDE observation, not by scraping the DOM: each
+probe carries a unique token and the local servers record every token they receive. An
+arriving request proves reachability regardless of what CORS does to the response, since
+CORS restricts READING a reply, not SENDING the request - which is the whole reason CSRF
+and DNS-rebinding against localhost services work.
 
-The pass/fail verdict of this suite rests on three things bruhswer genuinely controls,
-NOT on whether loopback is reachable:
+The attacker page is served from a loopback origin on a different port. A real hostile
+page would come from the internet; same-origin policy treats a different port as a
+different origin so the cross-origin behaviour is representative, but the routed network
+path is covered separately in section C.
 
-  1. bruhswer creates no local endpoint of its own       (section A)
-  2. bruhswer refuses the URL schemes that would bypass its controls   (section A)
-  3. what bruhswer CLAIMS matches what was just measured (section D)
+Nothing here scans, and nothing touches a service it did not create. Third-party
+listeners are INVENTORIED (section E) and reported, never probed or modified.
 
-Section D is the point of the whole file. If a future change made loopback reachable
-in a new way, or made a blocked range reachable, the suite fails not because the
-platform changed but because bruhswer's UI would then be telling the user something
-untrue.
-
-HOW REACHABILITY IS MEASURED
-
-By server-side observation, not by scraping the DOM. Each probe carries a unique token
-in its path; the local test servers record every token they actually receive. A request
-that arrives is proof of reachability regardless of what CORS then does to the
-response - which matters, because CORS restricts READING a reply, not SENDING the
-request. That distinction is the whole reason CSRF and DNS-rebinding attacks against
-localhost services work.
-
-The attacker page is served from a loopback origin on a different port. Stated plainly:
-a real hostile page would be served from the internet. Same-origin policy treats a
-different port as a different origin, so the cross-origin behaviour is representative,
-but the network path from an internet origin is NOT re-measured here - section C covers
-the routed cases separately.
-
-Nothing in this file scans, and nothing touches a service it did not itself create. The
-third-party services listening on this machine are INVENTORIED (section E) and reported,
-never probed and never modified - brief SS8/SS9 of the hardening pass.
-
-WHAT THIS SUITE ITSELF EXPOSES, WHILE IT RUNS
-
-Being honest about the test as well as the product: to measure whether the host's own
-LAN address behaves like loopback, the suite binds one probe service to that address
-for the duration of the run. For those few minutes port 18732 is reachable from the
-local network, subject to the host firewall's inbound rules. Every other probe service
-is bound to a loopback address only, and no probe server is ever bound to a wildcard
-address, because that would expose it far more broadly than the measurement requires.
-All of them are shut down in a `finally` block.
+Honest about the test as well as the product: to measure whether the host's own LAN
+address behaves like loopback, one probe service binds to that address for the run, so
+port 18732 is reachable from the local network for those few minutes. Every other probe
+binds to loopback, none binds to a wildcard, and all are shut down in a `finally`.
 """
 
 from __future__ import annotations

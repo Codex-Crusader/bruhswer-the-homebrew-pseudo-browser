@@ -1,34 +1,22 @@
 """A global panic hotkey: Ctrl+Shift+End stops this session's browser at once.
 
-WHY A DEDICATED THREAD, AND NOT A TK `after()` TICK
-    `RegisterHotKey(NULL, ...)` posts WM_HOTKEY to the REGISTERING THREAD's message
-    queue as a thread message - one with no target window. Tk owns and pumps the main
-    thread's queue inside `mainloop`, so registering there and hoping to observe the
-    message from a periodic `PeekMessageW` is a race with Tk's own pump: Tk can remove
-    and discard the thread message first, and `DispatchMessage` has no window to
-    deliver a NULL-hwnd hotkey to anyway.
+A dedicated thread, not a Tk `after()` tick. `RegisterHotKey(NULL, ...)` posts WM_HOTKEY
+to the REGISTERING THREAD's queue as a thread message with no target window, and Tk
+pumps the main thread's queue inside `mainloop` - so registering there races Tk's own
+pump, which can remove and discard the message first. That design appears to work when
+tested by hand and silently drops the key in use, which for a panic control is the worst
+possible failure. So it registers on a thread bruhswer owns that does nothing but block
+in `GetMessageW`, and never touches Tk.
 
-    That design would appear to work when tested by hand and silently drop the key in
-    use, which for a panic control is the worst possible failure - the user believes
-    they have an escape hatch and finds out otherwise at the moment they need it.
+This thread does not enumerate processes, terminate anything, or read a profile:
+enumeration alone is a PowerShell round trip that can take a minute, which would make
+the hotkey non-immediate and prevent a bounded teardown. Its whole job is to notice the
+key and put a token on a queue.
 
-    So the hotkey is registered on a thread bruhswer owns, which does nothing but block
-    in `GetMessageW`. It never touches Tk.
-
-WHAT THIS THREAD DOES NOT DO
-    It does not enumerate processes, terminate anything, or read a profile. The
-    enumeration alone is a PowerShell round trip that can take up to a minute, and
-    doing it here would make the hotkey non-immediate AND prevent a bounded teardown.
-    This thread's entire job is to notice the key and put a token on a queue. All the
-    work happens on the Tk side, off this thread.
-
-IF REGISTRATION FAILS
-    Another application may already own Ctrl+Shift+End - including a second copy of
-    bruhswer. `available` then reads False and the UI says so, prominently. There is
-    deliberately no fallback to a Tk-level binding: a key that works only while
-    bruhswer has focus is not a panic key, because the whole point is to fire while the
-    hosted browser has focus, and offering it under the same name would be a claim
-    bruhswer cannot keep.
+If registration fails - another application, including a second copy of bruhswer, may
+already own Ctrl+Shift+End - `available` reads False and the UI says so prominently.
+There is deliberately no Tk-level fallback: a key that works only while bruhswer has
+focus is not a panic key, since the point is to fire while the browser has focus.
 """
 
 from __future__ import annotations

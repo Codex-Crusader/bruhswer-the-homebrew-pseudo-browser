@@ -1,20 +1,18 @@
-"""HostGuard — protects this PC from other devices on the same network.
+"""HostGuard - protects this PC from other devices on the same network.
 
-This is a different problem from everything else in bruhswer. The rest of the app asks
-"what can a website reach?"; HostGuard asks "what can the laptop at the next table
-reach?" (brief SS10, SS11). It is useful even when the browser is not running.
+The rest of the app asks "what can a website reach?"; this asks "what can the laptop at
+the next table reach?", and is useful even when the browser is not running.
 
-It DETECTS and EXPLAINS. It never silently changes host configuration. Stage 4 found
-this machine on university Wi-Fi with File and Printer Sharing enabled on the Public
-profile and SMB signing off; the correct response is to tell the user and offer a
-narrow, reversible fix they approve -- not to reconfigure their PC behind their back
-(brief SS42, SS70).
+It DETECTS and EXPLAINS, and never silently changes host configuration. This machine was
+found on university Wi-Fi with File and Printer Sharing enabled on the Public profile
+and SMB signing off; the right response is to tell the user and offer a narrow,
+reversible fix they approve.
 
-Every check here is a READ_BACK except `host.listeners` and `host.remoteadmin`, which
-enumerate sockets and services that are open right now. HostGuard asks Windows what its
-settings are; it never sends a packet at this PC from another machine. "File and Printer
-Sharing is disabled for Public" is a configuration fact - "no device on this Wi-Fi can
-reach this PC" is a claim bruhswer has never tested.
+Every check is a READ_BACK except `host.listeners` and `host.remoteadmin`, which
+enumerate what is open right now. HostGuard asks Windows what its settings are and never
+sends a packet at this PC from another machine: "File and Printer Sharing is disabled
+for Public" is a configuration fact, "no device on this Wi-Fi can reach this PC" is a
+claim bruhswer has never tested.
 """
 
 from __future__ import annotations
@@ -32,12 +30,10 @@ def _gather() -> dict:
     """Run this module's seven queries at once and return them by name.
 
     Measured: HostGuard was 5213ms of a 9398ms pass, entirely spent waiting on
-    PowerShell. The queries are read-only, touch no shared state, and none depends on
-    another's result, so they are genuinely independent.
+    PowerShell, and the queries are read-only and independent.
 
-    Only the WAITING overlaps. Each probe still runs its own fixed script, keeps its own
-    status, and is attributed on its own - a batched god-script would have turned seven
-    reason codes into one.
+    Only the WAITING overlaps. Each probe still runs its own fixed script and keeps its
+    own status - a batched god-script would have turned seven reason codes into one.
     """
     queries = {
         "profiles": sysquery.network_profiles,

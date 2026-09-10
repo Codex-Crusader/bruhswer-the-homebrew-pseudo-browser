@@ -1,19 +1,15 @@
-"""PrivacyGuard — reduce what websites learn, without making the browser unique.
+"""PrivacyGuard - reduce what websites learn, without making the browser unique.
 
-The governing rule (brief SS31): a spoof that makes bruhswer MORE identifiable is
-rejected. A browser reporting 4 CPU cores, a 1000x1000 screen and a UTC timezone on a
-Windows laptop is rarer than one reporting the truth, and rarity is what fingerprinting
-feeds on. So bruhswer does NOT spoof hardware, screen, timezone, locale, fonts, canvas,
-WebGL or the User-Agent.
+A spoof that makes bruhswer MORE identifiable is rejected: a browser reporting 4 CPU
+cores, a 1000x1000 screen and a UTC timezone on a Windows laptop is rarer than one
+reporting the truth, and rarity is what fingerprinting feeds on. So nothing here spoofs
+hardware, screen, timezone, locale, fonts, canvas, WebGL or the User-Agent. It turns
+OFF collection surfaces and ON protections Edge already ships, which millions of Edge
+users also run.
 
-What it does instead is turn OFF collection surfaces and turn ON protections Edge
-already ships, which is both effective and common -- millions of Edge users run strict
-tracking prevention, so it does not single anyone out.
-
-Settings are written into bruhswer's OWN profile directory only. bruhswer never writes
-Edge enterprise policy (HKCU\\Software\\Policies\\Microsoft\\Edge), because that would
-change every Edge instance on the machine, including the user's ordinary browsing --
-the opposite of a narrow change (brief SS70).
+Written into bruhswer's OWN profile directory only. It never writes Edge enterprise
+policy (HKCU\\Software\\Policies\\Microsoft\\Edge), which would change every Edge
+instance on the machine, including the user's ordinary browsing.
 """
 
 from __future__ import annotations
@@ -30,10 +26,9 @@ _log = get_logger("privacy")
 # tell "not applied yet" apart from "applied and did not stick".
 NO_PROFILE_YET = "<no session has run yet>"
 
-# Sentinel for "the Preferences file exists but could not be parsed". Distinct from the
-# above, and distinct from a clean read, because those are three different facts and
-# collapsing any two of them is how this module produced a green light it had not
-# earned - see verify_account_signin.
+# "The Preferences file exists and could not be parsed". Three different facts -
+# not applied yet, unreadable, clean read - and collapsing any two of them is how this
+# module produced a green light it had not earned.
 PREFS_UNREADABLE = "<preferences unreadable>"
 
 
@@ -186,6 +181,20 @@ def _write_prefs(prefs_path: Path, prefs: dict) -> bool:
     return True
 
 
+def _read_prefs(prefs_path: Path) -> dict | None:
+    """The parsed Preferences object, or None if it could not be read as one.
+
+    A file that parses to a list, a string or null is as unreadable as one that does
+    not parse at all: every caller indexes it as a mapping, and those reached the
+    callers as an AttributeError instead of the "could not look" answer they render.
+    """
+    try:
+        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return prefs if isinstance(prefs, dict) else None
+
+
 def _assign(tree: dict, dotted: str, value: object) -> None:
     parts = dotted.split(".")
     node = tree
@@ -207,13 +216,11 @@ def apply_to_profile(profile_dir: Path, mode: str) -> int:
     default_dir.mkdir(parents=True, exist_ok=True)
     prefs_path = default_dir / "Preferences"
 
-    prefs: dict = {}
-    if prefs_path.is_file():
-        try:
-            prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+    prefs = _read_prefs(prefs_path)
+    if prefs is None:
+        if prefs_path.is_file():
             _log.warning("existing Preferences unreadable; writing a fresh file")
-            prefs = {}
+        prefs = {}
 
     chosen = settings_for(mode)
     for setting in chosen:
@@ -228,28 +235,19 @@ def apply_to_profile(profile_dir: Path, mode: str) -> int:
 def apply_download_directory(profile_dir: Path, download_dir: Path) -> None:
     """Point the browser's downloads at bruhswer's quarantine.
 
-    THIS MUST BE A PREFERENCE, NOT A COMMAND-LINE FLAG.
-
-    bruhswer originally passed `--download-directory=<quarantine>`. That is not a real
-    Chromium switch. Edge ignored it silently and downloads went to the user's REAL
-    Downloads folder - so the quarantine claim was false while every test still passed,
-    because nothing had ever checked where a file actually landed. Measured with a
-    deliberate download probe, not guessed.
+    A PREFERENCE, NOT A FLAG. `--download-directory=` is not a real Chromium switch;
+    Edge ignored it silently and downloads went to the user's real Downloads folder, so
+    the quarantine claim was false while every test passed. Found with a download
+    probe, not by reading.
 
     `download.prompt_for_download = False` matters as much as the directory: with a
-    prompt, the browser would show a Save dialog and the user could steer a hostile
-    download anywhere, which is exactly what brief SS36 forbids.
+    prompt the user could steer a hostile download anywhere.
     """
     default_dir = profile_dir / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
     prefs_path = default_dir / "Preferences"
 
-    prefs: dict = {}
-    if prefs_path.is_file():
-        try:
-            prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            prefs = {}
+    prefs = _read_prefs(prefs_path) or {}
 
     target = str(download_dir)
     _assign(prefs, "download.default_directory", target)
@@ -266,16 +264,17 @@ def verify_download_directory(profile_dir: Path, download_dir: Path) -> tuple[bo
     prefs_path = profile_dir / "Default" / "Preferences"
     if not prefs_path.is_file():
         return False, "no profile yet"
-    try:
-        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        # SENTINEL, not a bare False - see verify_account_signin's note above for why.
-        # "Could not read the file" is not "downloads are not quarantined"; the caller
+    prefs = _read_prefs(prefs_path)
+    if prefs is None:
+        # "Could not read the file" is not "downloads are not quarantined". The caller
         # must not turn a locked or mid-rewrite Preferences file into a critical FAIL.
         return False, PREFS_UNREADABLE
 
-    got = prefs.get("download", {}).get("default_directory")
-    prompt = prefs.get("download", {}).get("prompt_for_download")
+    download = prefs.get("download", {})
+    if not isinstance(download, dict):
+        return False, PREFS_UNREADABLE
+    got = download.get("default_directory")
+    prompt = download.get("prompt_for_download")
     if got != str(download_dir):
         return False, f"download directory is {got!r}, expected {str(download_dir)!r}"
     if prompt is not False:
@@ -286,48 +285,32 @@ def verify_download_directory(profile_dir: Path, download_dir: Path) -> tuple[bo
 def verify_account_signin(profile_dir: Path) -> tuple[bool, str]:
     """Is a Microsoft account signed into this profile? Returns (signed_in, detail).
 
-    THIS EXISTS BECAUSE THE ANSWER TURNED OUT TO BE YES.
+    This exists because the answer turned out to be yes. A brand-new DISPOSABLE session
+    opened with the developer's Microsoft account signed in and their favourites
+    synced; the profile held an email, full name, account id and tenant id. So a
+    disposable session is fresh, but Edge repopulates it with the user's identity
+    within seconds of launch.
 
-    Measured while taking screenshots for the README, which is the sort of place this
-    project keeps finding its own defects: a brand-new DISPOSABLE session opened with
-    the developer's Microsoft account already signed in, their synced favourites on
-    the bookmarks bar, and a banner reading "We are now syncing your browsing data
-    across all your devices". Reading the profile back confirmed it - `account_info`
-    held an email, full name, account id and tenant id, and `sync_consent_recorded`
-    was true.
-
-    That made the documented claim that a disposable session is a "fresh, empty
-    profile" materially wrong: the profile is fresh, but Edge repopulates it with the
-    user's identity within seconds of launch.
-
-    `--disable-sync` stops the syncing. Nothing on the command line stops the
-    SIGN-IN, so this reads the profile and reports the truth instead of assuming the
-    flag was enough. The caller renders it as NOT ENFORCEABLE, because bruhswer has
-    no in-scope mechanism to prevent it - the only control that works is machine-wide
-    Edge policy, which would change every Edge profile on the PC.
-
-    The user-facing remedy is a real one and is stated in the docs: sign out inside
-    the bruhswer session, in Edge's own Settings > Profiles.
+    `--disable-sync` stops the syncing; nothing on the command line stops the SIGN-IN,
+    so this reads the profile rather than assuming the flag was enough. The caller
+    renders it NOT ENFORCEABLE - the only control that works is machine-wide Edge
+    policy. The remedy is to sign out inside the session, in Edge's Settings > Profiles.
     """
     prefs_path = profile_dir / "Default" / "Preferences"
     if not prefs_path.is_file():
         return False, "no profile yet"
-    try:
-        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        # SENTINEL, not a bare False. Returning ("Preferences unreadable") meant
-        # "could not read the file" reached the caller as the same (False, ...) shape
-        # as "read it, found no account" - and _privacy_checks turned every
-        # not-signed-in result other than "no profile yet" into a PASS reading
-        # "No Microsoft account is signed into this profile."
-        #
-        # So a Preferences file that was locked, corrupt, or caught truncated during
-        # one of Chromium's rewrites produced a GREEN privacy light asserting a fact
-        # nobody had established. The caller now matches this constant and reports
-        # UNKNOWN, which is an acceptable answer here; a green light is not.
+    prefs = _read_prefs(prefs_path)
+    if prefs is None:
+        # A sentinel, not a bare False. "Could not read the file" used to reach the
+        # caller in the same (False, ...) shape as "read it, found no account", so a
+        # locked or mid-rewrite Preferences file produced a GREEN privacy light
+        # asserting a fact nobody had established. UNKNOWN is acceptable here; green
+        # is not.
         return False, PREFS_UNREADABLE
 
     accounts = prefs.get("account_info") or []
+    if not isinstance(accounts, list):
+        return False, PREFS_UNREADABLE
     signed_in = any(isinstance(a, dict) and a.get("email") for a in accounts)
     sync_consent = bool(prefs.get("sync_consent_recorded"))
 
@@ -347,9 +330,8 @@ def verify_applied(profile_dir: Path, mode: str) -> tuple[int, int, list[str]]:
         # Not a failure: settings are written at launch, so before the first session
         # there is simply nothing to read. The caller distinguishes this case.
         return 0, len(settings_for(mode)), [NO_PROFILE_YET]
-    try:
-        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    prefs = _read_prefs(prefs_path)
+    if prefs is None:
         return 0, len(settings_for(mode)), ["Preferences file unreadable"]
 
     missing: list[str] = []

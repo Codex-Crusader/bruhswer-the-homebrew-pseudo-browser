@@ -20,13 +20,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from app.security import integrity  # noqa: E402
-from app.verdict import Verdict  # noqa: E402
+from app.verdict import UnknownReason, Verdict  # noqa: E402
 
 
 class _Tree:
@@ -130,6 +131,57 @@ class TestManifestHonesty(unittest.TestCase):
             self.assertFalse(report.manifest_present)
         finally:
             tree.close()
+
+    def test_a_ruined_manifest_is_not_reported_as_an_absent_one(self):
+        """A manifest that is THERE and unusable must not be explained away.
+
+        Both states leave nothing to compare against, so both are UNKNOWN - but the
+        absent case renders as "normal when running from a source checkout", and
+        applying that sentence to a blank, corrupt or non-UTF-8 manifest inside a real
+        install is this project's oldest defect: nothing looked, reported as nothing
+        wrong. The non-UTF-8 case also used to raise UnicodeDecodeError straight out
+        of a function whose docstring promises it never raises.
+        """
+        cases = (
+            ("empty", b""),
+            ("unparseable", b"garbage\n"),
+            ("not utf-8", b"\xff\xfe\x00\x80"),
+        )
+        for name, payload in cases:
+            with self.subTest(manifest=name):
+                tree = _Tree()
+                try:
+                    tree.manifest.write_bytes(payload)
+                    report = integrity.check_tree(tree.root, tree.manifest)
+                    self.assertFalse(report.ok)
+                    self.assertFalse(report.manifest_present)
+                    self.assertTrue(report.manifest_unreadable)
+                finally:
+                    tree.close()
+
+        tree = _Tree()
+        try:
+            report = integrity.check_tree(tree.root, tree.manifest)
+            self.assertFalse(report.manifest_unreadable,
+                             "an absent manifest is not a damaged one")
+        finally:
+            tree.close()
+
+    def test_a_ruined_manifest_reaches_the_user_as_unreadable(self):
+        """Read through verify(), the way the panel does, not off the report."""
+        tree = _Tree()
+        try:
+            tree.manifest.write_bytes(b"\xff\xfe\x00\x80")
+            report = integrity.check_tree(tree.root, tree.manifest)
+        finally:
+            tree.close()
+
+        with mock.patch.object(integrity, "check_tree", lambda *a, **k: report):
+            checks = integrity.verify()
+        self.assertEqual(len(checks), 1)
+        self.assertIs(checks[0].verdict, Verdict.UNKNOWN)
+        self.assertIs(checks[0].unknown_reason, UnknownReason.UNREADABLE)
+        self.assertNotIn("source checkout", checks[0].detail)
 
     def test_check_is_not_critical_so_it_cannot_block_launch(self):
         """A damaged install is worth reporting, not worth refusing to run over -

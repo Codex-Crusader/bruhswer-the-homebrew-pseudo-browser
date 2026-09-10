@@ -1,8 +1,8 @@
 """BRUHWSER configuration: fixed paths, fixed policy, no dynamic execution.
 
-Everything here is a literal authored in this file. Nothing is ever derived from a URL,
-a filename, an HTTP header, a downloaded file, or any other browser-controlled input
-(brief SS15, SS48). Why each value is what it is: docs/ARCHITECTURE.md.
+Everything here is a literal authored in this file. Nothing is derived from a URL, a
+filename, an HTTP header, a downloaded file, or any other browser-controlled input.
+Why each value is what it is: docs/ARCHITECTURE.md.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def apply_light() -> None:
 
 
 # Keyed by network_guard.PolicyState's VALUE, so this module need not import the
-# network layer. ONE map: every UI reads it, none keeps a copy.
+# network layer. One map: every UI reads it, none keeps a copy.
 POLICY_STATE_COLOUR = {
     "ALLOWED": FG_DIM,
     "BLOCKED": OK_GREEN,
@@ -90,8 +90,8 @@ POLICY_STATE_COLOUR = {
 POLICY_STATE_UNKNOWN_COLOUR = BAD_RED
 POLICY_STATE_UNKNOWN_LABEL = "UNRECOGNISED POLICY STATE"
 
-# Shapes, so a verdict is never carried by colour alone. chrome.SHAPE covers the three
-# verdicts; these two are for the rows that are not verdicts at all.
+# So a verdict is never carried by colour alone. chrome.SHAPE covers the three
+# verdicts; these two are for rows that are not verdicts at all.
 SHAPE_UNKNOWN = "\u25cb"
 SHAPE_LIMITATION = "\u25ac"
 
@@ -122,7 +122,7 @@ EDGE_CANDIDATES = (
 EDGE_EXPECTED_SUBJECT_CN = "Microsoft Corporation"
 
 # --- Windows tooling (fixed absolute paths) -------------------------------------
-# CREATE_NO_WINDOW. Passed as `creationflags` to every helper process, or each of the
+# CREATE_NO_WINDOW, passed as `creationflags` to every helper process, or each of the
 # dozens of PowerShell and icacls calls would pop up a console window.
 NO_WINDOW = 0x08000000
 
@@ -155,11 +155,9 @@ FIT_RETRY_MS = 120
 HOST_MAX_ATTEMPTS = 25
 
 # --- disposable session overwrite -----------------------------------------------
-# HYGIENE, not an erasure guarantee - see session_manager.NOT_GUARANTEED.
-#
-# The cap exists because a profile cache runs to gigabytes. The small files hold the
-# identifying material and sit far below it. Files above it are skipped and COUNTED,
-# and the count is reported to the user.
+# Hygiene, not an erasure guarantee - see session_manager.NOT_GUARANTEED. The cap
+# exists because a profile cache runs to gigabytes; the small files hold the
+# identifying material. Files above it are skipped, counted, and reported.
 DISPOSABLE_OVERWRITE_MAX_BYTES = 8 * 1024 * 1024
 
 OVERWRITE_CHUNK_BYTES = 256 * 1024
@@ -188,9 +186,9 @@ PANIC_EXIT_WAIT_MS = 2000
 PANIC_JOIN_TIMEOUT_SECONDS = 2.0
 
 # --- network policy -------------------------------------------------------------
-# DELIBERATELY BRUHWSER while the product name is lowercase `bruhswer`. Renaming these
-# is a migration, not a case change: the app would fail closed on "rule not present"
-# while two perfectly good rules sat on the host under the old name.
+# Deliberately BRUHWSER while the product name is lowercase. Renaming is a migration,
+# not a case change: the app would fail closed on "rule not present" while two
+# perfectly good rules sat on the host under the old name.
 RULE_PREFIX = "BRUHWSER"
 
 # Measured effective in Stage 4 gate A16. Deliberately NOT included: 100.64.0.0/10
@@ -202,7 +200,7 @@ BLOCKED_IPV4 = (
     "169.254.0.0/16",
 )
 
-# Treated separately on purpose (brief SS23): IPv4 rules do not protect IPv6.
+# Treated separately on purpose: IPv4 rules do not protect IPv6.
 BLOCKED_IPV6 = (
     "fc00::/7",
     "fe80::/10",
@@ -215,7 +213,7 @@ CAPTIVE_PORTAL_WARNING = (
 )
 
 # NOT enforceable: Windows Firewall does not filter loopback, so no rule stops the
-# browser reaching these. Listed for honest reporting only (brief SS21).
+# browser reaching these. Listed for honest reporting only.
 DEV_SERVICE_PORTS = (
     63342,  # PyCharm built-in server
     5173,   # Vite
@@ -228,8 +226,7 @@ DEV_SERVICE_PORTS = (
 )
 
 # --- Edge command line ----------------------------------------------------------
-# None of these weakens a security control. What is never passed, and why, is
-# DANGEROUS_FLAGS below.
+# None of these weakens a security control. What is never passed is DANGEROUS_FLAGS.
 BASE_EDGE_FLAGS = (
     "--no-first-run",
     "--no-default-browser-check",
@@ -259,9 +256,9 @@ DANGEROUS_FLAGS = (
 )
 
 # --- IPC ------------------------------------------------------------------------
-# There is NONE, and that is the design: the UI and the controller run in the same
-# process, so the UI calls Controller methods directly. tests/test_security.py asserts
-# bruhswer opens no listening socket and no named pipe. See docs/ARCHITECTURE.md.
+# There is none, and that is the design: the UI and the controller run in the same
+# process. tests/test_security.py asserts bruhswer opens no listening socket and no
+# named pipe.
 
 
 def ensure_dirs() -> None:

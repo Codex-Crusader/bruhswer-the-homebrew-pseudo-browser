@@ -1,14 +1,12 @@
-"""BrowserGuard — the browser's own data stays where bruhswer put it.
+"""BrowserGuard - the browser's own data stays where bruhswer put it.
 
-Two honest framings, and the difference matters:
+A dedicated, ACL-tightened profile directory keeps bruhswer's browsing state out of the
+user's ordinary Edge/Chrome profiles and out of their documents. That is real and worth
+doing.
 
-  - A dedicated, ACL-tightened profile directory keeps bruhswer's browsing state out of
-    the user's ordinary Edge/Chrome profiles and out of their documents. That is real,
-    and it is worth doing (brief SS12).
-  - It is NOT a sandbox. Stage 4 gate A4 measured that the browser PROCESS runs on an
-    ordinary user token and can read the whole user profile regardless of where its own
-    data lives. This module is hygiene and defence in depth, not confinement, and the
-    UI must never present it as confinement.
+It is NOT a sandbox. Gate A4 measured that the browser PROCESS runs on an ordinary user
+token and can read the whole user profile regardless of where its own data lives. This
+is hygiene and defence in depth, and the UI must never present it as confinement.
 """
 
 from __future__ import annotations
@@ -29,19 +27,17 @@ _log = get_logger("browserguard")
 def harden_profile_dir(profile_dir: Path) -> tuple[bool, str]:
     """Restrict the profile folder to this user, removing inherited access.
 
-    NO `/T`. This is not a style choice - an earlier version used `/inheritance:r`
-    together with `/T`, which applies the grant to every existing FILE as well. The
-    `(OI)(CI)` flags are container-inheritance flags and are inherit-only on a file, so
-    each file lost its inherited access and gained nothing effective in return. icacls
-    still returned 0 while the profile became unreadable, and bruhswer's own Preferences
-    file started raising PermissionError.
+    NO `/T`, and that is not a style choice. `/inheritance:r` with `/T` applies the
+    grant to every existing FILE, where the container-inheritance `(OI)(CI)` flags are
+    inherit-only - so each file lost its inherited access and gained nothing. icacls
+    returned 0 while the profile became unreadable and Preferences raised
+    PermissionError.
 
-    Setting the ACL on the DIRECTORY alone is both correct and sufficient: Windows
-    propagates (OI)(CI) entries to children that inherit, and newly created files pick
-    them up automatically.
+    The DIRECTORY alone is correct and sufficient: Windows propagates (OI)(CI) entries
+    to children that inherit, and new files pick them up automatically.
 
-    icacls is given an explicit argument list with no shell. The only substituted value
-    is the profile path, which bruhswer built itself from config constants.
+    icacls gets an explicit argument list with no shell. The only substituted value is
+    the profile path, which bruhswer built from config constants.
     """
     profile_dir.mkdir(parents=True, exist_ok=True)
     user = getpass.getuser()
@@ -100,11 +96,10 @@ def _read_acl(profile_dir: Path) -> str:
 def _is_within(candidate: Path, ancestor: Path) -> bool:
     """True if candidate is ancestor or sits under it.
 
-    Both sides are resolved before comparison. Resolving only the candidate left an
-    asymmetry: if LOCALAPPDATA were an 8.3 short path, or AppData\\Local were redirected
-    through a junction, the two would never match and this critical check would PASS for
-    a profile that IS the user's real browser data. Lowered as well, because Windows
-    paths are case-insensitive and is_relative_to is not.
+    BOTH sides are resolved. Resolving only the candidate meant an 8.3 short path or a
+    junction on AppData\\Local would never match, and this critical check would PASS for
+    a profile that IS the user's real browser data. Lowered too, because Windows paths
+    are case-insensitive and is_relative_to is not.
     """
     try:
         here = Path(str(_resolved(candidate)).lower())
@@ -226,22 +221,16 @@ def verify_renderer_sandbox(
         renderer_pids: Sequence[int] | None) -> list[Check]:
     """MEASURE the renderer sandbox, rather than asserting it.
 
-    This check used to be a hardcoded PASS quoting a Stage 4 measurement taken on one
-    machine with one Edge build. That is exactly the "green light nobody verified" this
-    project treats as a vulnerability - on the same machine, Chrome's renderers were
-    restricted but NOT AppContainer, so the property is genuinely build-dependent.
-
-    With no session running there is nothing to measure, and the honest answer is
-    UNKNOWN.
+    This used to be a hardcoded PASS quoting one measurement on one machine with one
+    Edge build. On that same machine Chrome's renderers were restricted but NOT
+    AppContainer, so the property is genuinely build-dependent. With no session running
+    there is nothing to measure and the honest answer is UNKNOWN.
     """
-    # THREE distinct situations, three distinct messages. They used to share one.
-    #
-    # None    the query failed - a PowerShell timeout, or the process could not start.
-    #         Saying "no browser session is running" here is a false statement about
-    #         the world, and it is the one the user is most likely to see while
-    #         actually browsing.
-    # []      the query succeeded and there are genuinely no renderers.
-    # [...]   measure them.
+    # Three situations, three messages; they used to share one.
+    #   None   the query failed. "No browser session is running" is then a false
+    #          statement, and the one the user is most likely to see while browsing.
+    #   []     the query succeeded and there are genuinely no renderers.
+    #   [...]  measure them.
     if renderer_pids is None:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,

@@ -1,11 +1,10 @@
 """Regression tests named after the overclaims they exist to prevent.
 
-This project's governing rule is that a security indicator which was never measured is
-a VULNERABILITY, not a documentation bug. These three defects were all live in shipped
-code, all produced a green or confident indicator, and all passed the existing 52-test
-static suite - because that suite checks bruhswer's STRUCTURE (no shell=True, no
-listener, no dynamic execution) and none of these were structural. They were each a
-place where "could not measure" was collapsed into "measured, and it was fine".
+A security indicator that was never measured is a VULNERABILITY, not a documentation
+bug. Every defect below was live in shipped code, produced a green or confident
+indicator, and passed the static suite - which checks STRUCTURE (no shell=True, no
+listener, no dynamic execution) and none of these were structural. Each collapsed
+"could not measure" into "measured, and it was fine".
 
 Every test here is written to FAIL against the pre-fix code. A regression test that
 would have passed before the fix documents nothing.
@@ -21,15 +20,18 @@ would have passed before the fix documents nothing.
                        gate A16 measurement. No equivalent IPv6 measurement exists.
   4. DownloadDirectory an unreadable Preferences file fell through to the same branch
                        as a clean read that found the wrong directory, so a locked or
-                       mid-rewrite Preferences file produced a CRITICAL FAIL asserting
-                       "Downloads would NOT be quarantined" - on a file bruhswer had
-                       just failed to parse, on the one check in the suite marked
-                       critical.
+                       mid-rewrite file produced a CRITICAL FAIL asserting "Downloads
+                       would NOT be quarantined" on a file it had just failed to parse.
+  5. WrongShapedPrefs  a Preferences file that PARSES but is not an object reached the
+                       same readers as an AttributeError, not as the sentinel they
+                       render as UNKNOWN. Two of them run inside Controller.start(),
+                       which has no handler.
 """
 
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -223,6 +225,79 @@ class TestUnreadableDownloadPrefsIsNeverAFail(unittest.TestCase):
             checks = verifier._download_checks(  # lint: allow protected-access
                 Path("profile"), Path("quarantine"))
         self.assertIs(checks[0].verdict, Verdict.PASS)
+
+
+class TestWrongShapedPreferencesIsUnreadableNotACrash(unittest.TestCase):
+    """Defect 5. A Preferences file that parses but is not an object.
+
+    Defects 2 and 4 fixed the case where the file does not parse. A file that parses
+    to a list, a string or null was never covered: every reader here indexes it as a
+    mapping, so those three inputs left the guards raising AttributeError instead of
+    returning the sentinel the callers already know how to render as UNKNOWN. Two of
+    the four readers run inside Controller.start(), which has no handler.
+
+    Written against a REAL file on disk rather than a patched read_text, so it reads
+    the way production does.
+    """
+
+    MALFORMED = ('[]', 'null', '"a string"', '{"download": "not an object"}',
+                 '{"account_info": {"not": "a list"}}')
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.profile = Path(self._tmp.name)
+        (self.profile / "Default").mkdir()
+        self.prefs = self.profile / "Default" / "Preferences"
+        self.quarantine = self.profile / "quarantine"
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_no_reader_raises_on_a_preferences_file_that_is_not_an_object(self):
+        for payload in self.MALFORMED:
+            with self.subTest(preferences=payload):
+                self.prefs.write_text(payload, encoding="utf-8")
+                privacy_guard.verify_account_signin(self.profile)
+                privacy_guard.verify_download_directory(self.profile, self.quarantine)
+                privacy_guard.verify_applied(self.profile, "standard")
+                self.prefs.write_text(payload, encoding="utf-8")
+                privacy_guard.apply_to_profile(self.profile, "standard")
+                self.prefs.write_text(payload, encoding="utf-8")
+                privacy_guard.apply_download_directory(self.profile, self.quarantine)
+
+    def test_a_non_object_file_is_reported_as_unreadable_not_as_a_clean_read(self):
+        for payload in ('[]', 'null', '"a string"'):
+            with self.subTest(preferences=payload):
+                self.prefs.write_text(payload, encoding="utf-8")
+                signed_in, detail = privacy_guard.verify_account_signin(self.profile)
+                self.assertFalse(signed_in)
+                self.assertEqual(detail, privacy_guard.PREFS_UNREADABLE)
+                ok, detail = privacy_guard.verify_download_directory(
+                    self.profile, self.quarantine)
+                self.assertFalse(ok)
+                self.assertEqual(detail, privacy_guard.PREFS_UNREADABLE)
+
+    def test_a_wrong_shaped_account_list_is_not_read_as_nobody_signed_in(self):
+        self.prefs.write_text('{"account_info": {"not": "a list"}}', encoding="utf-8")
+        signed_in, detail = privacy_guard.verify_account_signin(self.profile)
+        self.assertFalse(signed_in)
+        self.assertEqual(detail, privacy_guard.PREFS_UNREADABLE)
+
+    def test_a_wrong_shaped_download_section_is_not_read_as_misconfigured(self):
+        """It must reach the critical check as UNKNOWN, never as a definite FAIL."""
+        self.prefs.write_text('{"download": "not an object"}', encoding="utf-8")
+        ok, detail = privacy_guard.verify_download_directory(
+            self.profile, self.quarantine)
+        self.assertFalse(ok)
+        self.assertEqual(detail, privacy_guard.PREFS_UNREADABLE)
+
+    def test_a_well_formed_file_is_still_read_normally(self):
+        """The guard must not turn every real profile into a permanent UNKNOWN."""
+        privacy_guard.apply_download_directory(self.profile, self.quarantine)
+        ok, detail = privacy_guard.verify_download_directory(
+            self.profile, self.quarantine)
+        self.assertTrue(ok, detail)
+        signed_in, detail = privacy_guard.verify_account_signin(self.profile)
+        self.assertFalse(signed_in)
+        self.assertNotEqual(detail, privacy_guard.PREFS_UNREADABLE)
 
 
 class TestIPv6IsNotClaimedAsMeasured(unittest.TestCase):

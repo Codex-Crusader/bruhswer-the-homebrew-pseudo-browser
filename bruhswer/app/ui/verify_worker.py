@@ -1,43 +1,25 @@
 """Re-run the security checks while a session is open, without freezing the window.
 
-WHY THIS EXISTS
-    bruhswer used to verify ONCE, at launch, and then leave six status lights showing
-    that one measurement for as long as the session stayed open. A firewall rule
-    deleted by another admin tool, an Edge update that changed the renderer sandbox, a
-    profile whose ACL was loosened - none of it moved the lights. The user went on
-    reading a green indicator that described a moment that had passed.
+bruhswer used to verify ONCE, at launch, and leave the status lights showing that one
+measurement for the life of the session. A deleted firewall rule, an Edge update that
+changed the renderer sandbox, a loosened profile ACL - none of it moved them. An
+indicator measured an hour ago and presented as current is the same defect as one never
+measured, wearing a timestamp.
 
-    This project's rule is that a security indicator which was never measured is a
-    vulnerability. An indicator that WAS measured, an hour ago, and is presented as
-    current, is the same defect wearing a timestamp.
+A full pass starts 14 helper processes and takes 5.5s measured, so it runs on a worker
+thread; results go onto a queue.Queue that a short `after()` tick drains.
 
-WHY IT NEEDS A THREAD
-    A full pass starts 14 helper processes - 13 PowerShell plus one icacls - and takes
-    5.5 seconds measured. Running that from a Tk `after()` callback would freeze the
-    window for five seconds, once a minute, forever.
+THE WORKER NEVER TOUCHES A TK OBJECT - not a widget, not `after()`, not a StringVar. Tk
+is not thread-safe and calling into it from here does not raise a helpful error, it
+corrupts the interpreter. Everything leaves through the queue and is applied by the Tk
+thread in `drain()`.
 
-    So: a worker thread runs the checks, results go onto a `queue.Queue`, and a short
-    `after()` tick on the Tk thread drains the queue.
-
-THE RULE THAT MATTERS MOST
-    THE WORKER NEVER TOUCHES A TK OBJECT. Not a widget, not `after()`, not `destroy()`,
-    not a StringVar. Tk is not thread-safe, and calling into it from here does not
-    raise a helpful error - it corrupts the interpreter or hard-crashes the process.
-    Everything this thread produces leaves through the queue and is applied by the Tk
-    thread in `drain()`.
-
-SHUTDOWN, STATED HONESTLY
-    The worker can be blocked inside `subprocess.run(..., timeout=60)` when the user
-    closes the window. It cannot observe the stop event until that helper returns, and
-    setting the event does NOT cancel the child process. The thread is therefore a
-    daemon: bruhswer exits promptly and Python tears the thread down rather than
-    waiting up to a minute for a PowerShell query nobody wants any more.
-
-    That is only acceptable because this worker owns NO cleanup. It never deletes a
-    profile, never destroys a session, never writes to the quarantine. It reads state
-    and reports it. Session teardown is the Tk thread's job and always was. If this
-    worker ever acquires a destructive responsibility, the daemon flag has to go and
-    real cancellation has to be built - so it must not acquire one.
+Shutdown: the worker can be blocked inside `subprocess.run(..., timeout=60)` and cannot
+observe the stop event until that returns, so the thread is a daemon rather than making
+bruhswer wait a minute to exit. That is only acceptable because this worker owns NO
+cleanup - it reads state and reports it, and session teardown is the Tk thread's job.
+If it ever acquires a destructive responsibility the daemon flag has to go and real
+cancellation has to be built.
 """
 
 from __future__ import annotations
@@ -65,19 +47,13 @@ class VerificationUpdate:
     result: verifier.VerificationResult | None
     generation: int
     verification_id: int = 0
-    # (check_id, title) for checks that were PASS last time and are not PASS now.
-    #
-    # The ID is carried alongside the title so the UI can tell when a warned control
-    # RECOVERS. Without it the window could raise a warning it had no way to take
-    # back: a single failed PowerShell query flips a check to UNKNOWN for one cycle,
-    # the next cycle succeeds and it returns to PASS, and because only PASS ->
-    # not-PASS is ever reported, nothing would arrive to clear the warning. The user
-    # would be left staring at "something changed while you were browsing" over a
-    # session where nothing had.
+    # (check_id, title) for checks that were PASS last time and are not PASS now. The
+    # ID rides along so the UI can tell when a warned control RECOVERS: only PASS ->
+    # not-PASS is reported, so without it a one-cycle UNKNOWN would leave "something
+    # changed while you were browsing" on screen with nothing able to clear it.
     regressions: tuple[tuple[str, str], ...] = ()
-    # True when the pass RAISED and nothing was measured. `result` is then the
-    # PREVIOUS result (or None), and the UI must present it as stale rather than
-    # current - never as a fresh set of green lights.
+    # The pass RAISED and nothing was measured. `result` is then the PREVIOUS result
+    # (or None) and the UI must present it as stale, never as fresh green lights.
     measurement_failed: bool = False
 
 
@@ -102,15 +78,12 @@ def find_regressions(previous: verifier.VerificationResult | None,
                      ) -> tuple[tuple[str, str], ...]:
     """Checks that were PASS and no longer are.
 
-    ANY non-PASS counts, not just FAIL. A control that used to verify and now cannot be
-    verified at all is exactly as important under this project's rule as one that
-    verifiably broke - "we can no longer tell" is not a quieter kind of good news, and
-    leaving the previous green light up while it is true would be the original defect
-    all over again.
+    ANY non-PASS counts, not just FAIL: "we can no longer tell" is not a quieter kind
+    of good news, and leaving the previous green light up would be the original defect.
 
     Only PASS -> not-PASS is reported. A check that was already UNKNOWN and stays
-    UNKNOWN is not news, and re-warning about it every 60 seconds would train the user
-    to dismiss the warning that matters.
+    UNKNOWN is not news, and re-warning every 60 seconds would train the user to
+    dismiss the warning that matters.
     """
     if previous is None:
         return ()
@@ -130,19 +103,13 @@ class VerifyWorker:
         self._interval = interval
         self._results: queue.Queue[VerificationUpdate] = queue.Queue()
         self._requests: queue.Queue[ctrl.VerificationRequest] = queue.Queue()
-        # A FRESH Event per thread, not one shared across the object's life.
-        # stop() clears _thread after a bounded join, but a worker stuck in a 60s
-        # helper call is still alive; if the next start() then cleared a SHARED
-        # event, that old thread would resume its loop and run alongside the new
-        # one - two verification loops sharing `_previous`, producing extra helper
-        # batches and spurious "something changed" curtains built from a comparison
-        # across two different sessions.
+        # A FRESH Event per thread. stop() clears _thread after a bounded join, but a
+        # worker stuck in a 60s helper call is still alive, and clearing a SHARED event
+        # in the next start() would revive it - two loops sharing `_previous`, and
+        # spurious "something changed" curtains comparing two different sessions.
         self._stop = threading.Event()
-        # Set by submit() to cut the between-cycles wait short. Without it a request
-        # handed over mid-cycle sat untouched until the full interval expired, so a
-        # "re-verify this session now" could be up to a minute late - and the GUI
-        # walkthrough caught exactly that, having passed previously only when the
-        # submit happened to land near the start of a cycle.
+        # Cuts the between-cycles wait short on submit(). Without it a mid-cycle
+        # request sat untouched for up to a full interval.
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._previous: verifier.VerificationResult | None = None
@@ -152,16 +119,12 @@ class VerifyWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
-        # CLEAR THE STOP EVENT FIRST. Without this, the second start() in a session's
-        # life spawns a thread whose _loop immediately re-reads a still-set event and
-        # exits - so closing a session and opening a new one left re-verification
-        # permanently dead, with submit() queueing requests nothing would ever read and
-        # the status lights frozen on the last result while still presented as current.
-        #
-        # That is the launch-time-snapshot defect this whole module exists to remove,
-        # reintroduced by one missing line. test_worker_restarts_after_stop pins it.
-        # A NEW Event, so any thread still unwinding from a previous stop() keeps
-        # its own set event and exits, rather than being revived by this clear().
+        # A NEW event, not a cleared one. Without this the second start() spawns a
+        # thread whose _loop re-reads a still-set event and exits, leaving
+        # re-verification permanently dead with the lights frozen but still presented
+        # as current. New, so a thread unwinding from a previous stop() keeps its own
+        # set event and exits rather than being revived. Pinned by
+        # test_worker_restarts_after_stop.
         self._stop = threading.Event()
         stop = self._stop
         self._thread = threading.Thread(
@@ -234,10 +197,7 @@ class VerifyWorker:
                     # _run_once guards the verification but not publishing its result.
                     _log.exception("verification cycle failed; worker continues")
 
-            # Wait for the interval, but return early for EITHER signal: stop (so
-            # closing bruhswer does not leave a thread in a 60-second nap) or a newly
-            # submitted request (so re-verifying a session is prompt rather than
-            # whenever the cycle happens to come round).
+            # Returns early on EITHER signal: stop, or a newly submitted request.
             if self._sleep(stop):
                 break
         _log.info("re-verification worker stopped")
@@ -245,9 +205,8 @@ class VerifyWorker:
     def _sleep(self, stop: threading.Event) -> bool:
         """Wait out the interval. True if the worker should stop.
 
-        Polls both signals rather than blocking on one, because Python has no
-        wait-for-any-of-these-events primitive. The slice is short enough that a
-        submit() feels immediate and long enough that this costs nothing.
+        Polls both signals rather than blocking on one: Python has no wait-for-any-of
+        primitive, and the slice is short enough that a submit() feels immediate.
         """
         deadline = time.monotonic() + self._interval
         while time.monotonic() < deadline:
@@ -262,15 +221,10 @@ class VerifyWorker:
         try:
             result = ctrl.run_verification(request)
         except Exception:                          # noqa: BLE001  # lint: allow broad-except - a crashed pass must not kill the worker
-            # A crash in here must not kill the worker: losing the thread would
-            # silently stop re-verification and leave the last result on screen
-            # looking current, which is the exact failure this module exists to end.
+            # Losing the thread would stop re-verification and leave the last result on
+            # screen looking current. Returning silently does the same by another
+            # route, so the failure is published rather than only logged.
             _log.exception("verification pass failed; worker continues")
-            # AND IT MUST NOT RETURN SILENTLY EITHER. Logging and returning left the
-            # UI with no idea the pass had failed, so it kept the previous result and
-            # its green lights and went on presenting them as current - the same
-            # stale-indicator defect, just reached by a different route. Publishing an
-            # explicit failed-measurement update lets the window say so.
             self._results.put(VerificationUpdate(
                 result=self._previous, generation=request.generation,
                 verification_id=request.verification_id,

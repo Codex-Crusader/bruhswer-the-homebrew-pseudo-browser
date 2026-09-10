@@ -1,10 +1,8 @@
 """Privacy comparison: Stock Edge vs bruhswer Standard vs bruhswer Disposable.
 
-Brief SS17: "Use controlled test pages. Do not use third-party tracking sites as the
-sole source of truth." So this serves its own probe pages from loopback and reads the
-results back out of the DOM. Nothing is sent to any external service.
+Serves its own probe pages from loopback and reads the results back out of the DOM, so
+no third-party tracking site is the source of truth and nothing leaves the machine.
 
-WHAT IT MEASURES
     identity      User-Agent, platform, languages, timezone, screen, hardware
     storage       cookies, localStorage, sessionStorage, IndexedDB, service workers
     referrer      same-origin and cross-origin, HTTPS-free local equivalents
@@ -12,16 +10,12 @@ WHAT IT MEASURES
     webrtc        ICE candidates, and specifically whether LAN addresses leak
     misc          plugins, doNotTrack, canvas/WebGL signature
 
-HOW IT IS FAIR
-    "Stock Edge" is a FRESH temporary profile with Edge's own defaults - not the user's
-    real profile, which would be neither reproducible nor appropriate to touch. Every
-    profile is driven through exactly the same page with the same flags.
+"Stock Edge" is a FRESH temporary profile with Edge's own defaults, not the user's real
+profile, and every profile is driven through the same page with the same flags.
 
-HOW TO READ THE FINGERPRINT RESULT
-    Fewer values is NOT automatically better (brief SS18). A value that differs from
-    stock Edge makes bruhswer *rarer*, which is worse. The interesting column is
-    "differs from stock" - each difference must be justified, and the ones that only
-    reduce collection surfaces (permissions, WebRTC candidates) are the good kind.
+Fewer values is NOT automatically better: a value that differs from stock Edge makes
+bruhswer rarer, which is worse. The interesting column is "differs from stock", where
+each difference must be justified and the good kind only reduce collection surfaces.
 
 Unelevated. Creates and deletes its own temp profiles. Changes nothing on the host.
 """

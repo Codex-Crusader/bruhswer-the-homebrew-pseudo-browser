@@ -44,16 +44,12 @@ NOT_GUARANTEED = (
     "Anything the site sent to its own servers",
     "Windows-level artefacts outside the profile folder",
     "Forensic recovery of deleted disk blocks",
-    # Spelled out because bruhswer now DOES overwrite files before deleting them, and
-    # an overwrite is the single easiest thing in this field to over-read. Writing new
-    # bytes to a file changes the LOGICAL contents at that path. It does not follow
-    # that the physical media no longer holds the old bytes:
-    #   - an SSD's controller does wear levelling, so a rewrite usually lands on a
-    #     different physical page and the original is left behind until it is garbage
-    #     collected, on the drive's schedule and outside anything bruhswer can see
-    #   - NTFS journals metadata, and small files can live entirely inside the MFT
-    #   - a copy may exist in a shadow copy, a restore point, or the page file
-    # bruhswer cannot inspect any of that, so it does not claim any of it.
+    # Spelled out because bruhswer DOES overwrite files before deleting them, and an
+    # overwrite is the easiest thing here to over-read. New bytes change the LOGICAL
+    # contents at that path; the media may still hold the old ones. SSD wear levelling
+    # lands the rewrite on a different physical page, NTFS can keep small files
+    # entirely inside the MFT, and a copy may sit in a shadow copy or the page file.
+    # bruhswer cannot inspect any of that, so it claims none of it.
     "That overwriting a file removed the old bytes from the physical disk",
 )
 
@@ -114,39 +110,26 @@ def pending_quarantine(session: Session) -> list[Path]:
 def _safe_to_delete(candidate: Path, expected_root: Path) -> bool:
     """May this path be handed to a recursive delete?
 
-    Three conditions, and all three are needed:
+    Three conditions, all needed:
 
-      1. It must not be a reparse point. `Path.is_dir()` FOLLOWS a directory
-         junction, so a junction planted under the disposable-profile or quarantine
-         root - which anything running as the user can create, including a
-         compromised browser process - looks exactly like an ordinary session folder.
+      1. Not a reparse point. `Path.is_dir()` FOLLOWS a directory junction, so a
+         junction planted under the disposable-profile root looks like an ordinary
+         session folder. NOT an `is_symlink()` call: measured, that returns FALSE for
+         a junction made with `mklink /J`, so the obvious check is silently inert
+         against the exact thing it appears to defend against. Refused outright rather
+         than resolved and contained - a junction aimed at ANOTHER session's folder in
+         the same root would pass a containment test and still redirect the delete.
+      2. Its resolved path is still inside the expected root.
+      3. It is not the root, so a bug cannot escalate to wiping everything.
 
-         MEASURED, and the reason this is not an `is_symlink()` call: on Windows,
-         `Path.is_symlink()` returns FALSE for a directory junction created with
-         `mklink /J`. A junction is a reparse point but not a symlink, so the
-         obvious-looking check is silently inert against the exact thing it appears
-         to defend against. The file-attribute test is the one that actually works,
-         and it is the same idiom quarantine.py already uses before exporting a file.
+    Also measured: `shutil.rmtree(junction, ignore_errors=True)` does NOT delete
+    through the junction, it refuses and swallows the error. So the unguarded version
+    leaked no data, it silently failed to clean up. These checks make that an explicit
+    refusal and remove the dependence on that rmtree behaviour staying true.
 
-         Refusing outright is stricter than resolving and checking where it lands: a
-         junction aimed at ANOTHER session's folder inside the same root would pass a
-         containment test while still redirecting the delete.
-      2. Its resolved path must still be inside the expected root.
-      3. It must not BE the root, so a bug can never escalate to wiping everything.
-
-    ALSO MEASURED, and worth recording because it changes how bad the failure would
-    be: `shutil.rmtree(junction, ignore_errors=True)` does NOT delete through the
-    junction - it refuses and the error is swallowed. So the un-guarded version leaked
-    no data; it simply failed to clean up while reporting nothing. These checks turn a
-    silent no-op into an explicit, logged refusal, and remove the dependence on that
-    rmtree behaviour staying true in a future Python.
-
-    This cannot close the underlying time-of-check/time-of-use gap: the path could in
-    principle be swapped between this returning True and rmtree running. Closing that
-    needs handle-based APIs Python does not expose on Windows. Recorded as a known,
-    accepted limit rather than left as a silent assumption - and an attacker who could
-    win that race is already running as the user, which the threat model states is not
-    defended against.
+    This cannot close the time-of-check/time-of-use gap - that needs handle-based APIs
+    Python does not expose on Windows. An attacker who could win that race is already
+    running as the user, which the threat model does not defend against.
     """
     try:
         info = candidate.stat(follow_symlinks=False)
@@ -203,35 +186,25 @@ class OverwriteReport:
 def _overwrite_tree(root: Path, expected_root: Path) -> OverwriteReport:
     """Overwrite every ordinary file under `root` with random bytes. Best effort.
 
-    WHAT THIS IS: a cheap extra step that makes the profile's contents unrecoverable by
-    ordinary means - an undelete tool, a file browser, someone reading the free list.
+    A cheap extra step that makes the contents unrecoverable by ordinary means - an
+    undelete tool, a file browser, someone reading the free list.
 
-    WHAT THIS IS NOT: erasure. See NOT_GUARANTEED above. The one-line version is that
-    an SSD's wear levelling means the new bytes usually land on a different physical
-    page and the old page survives until the drive garbage-collects it, which bruhswer
-    can neither observe nor influence. This function's name says "overwrite" and not
-    "wipe" or "secure delete" on purpose.
+    NOT erasure; see NOT_GUARANTEED above. An SSD's wear levelling puts the new bytes
+    on a different physical page and the old one survives until the drive
+    garbage-collects it, which bruhswer can neither observe nor influence. The name
+    says "overwrite", not "wipe", on purpose.
 
-    THE DANGEROUS PART, and why the walk is hand-rolled instead of os.walk:
-        This function OPENS FILES FOR WRITING inside a directory tree. That makes it a
-        destructive primitive, and a reparse point anywhere in that tree would aim it
-        somewhere else - a junction planted under the disposable-profile root by
-        anything running as the user, including a compromised browser process, is a
-        perfectly ordinary-looking folder.
+    The walk is hand-rolled because this OPENS FILES FOR WRITING inside a tree, which
+    makes it a destructive primitive that a reparse point anywhere would aim elsewhere.
+    So every directory is checked for FILE_ATTRIBUTE_REPARSE_POINT before descending,
+    every file before opening, and each resolved path re-confirmed inside
+    `expected_root` - the check has to hold at every level, not once at the top.
+    os.walk is avoided because its handling of Windows junctions depends on
+    version-specific os.scandir behaviour.
 
-        So every directory is checked for FILE_ATTRIBUTE_REPARSE_POINT before it is
-        descended into, and every file is checked before it is opened, and each
-        resolved path is re-confirmed to sit inside `expected_root`. This is the same
-        discipline _safe_to_delete applies before rmtree, applied per entry, because
-        here the check has to hold at every level rather than once at the top.
-
-        os.walk is not used because its handling of Windows junctions depends on
-        version-specific behaviour of os.scandir, and this is not a place to inherit a
-        subtlety from the standard library.
-
-    Failure is never fatal: deletion is what actually removes the data, and refusing to
-    delete because an overwrite failed would trade the guarantee bruhswer HAS for one
-    it does not.
+    Failure is never fatal: deletion is what removes the data, and refusing to delete
+    because an overwrite failed would trade the guarantee bruhswer HAS for one it does
+    not.
     """
     # A dict rather than four `nonlocal` counters: the recursive walk below has to
     # accumulate across every level, and a plain mutable mapping keeps that explicit
@@ -320,19 +293,14 @@ def _overwrite_file(path: Path, size: int) -> bool:
 def destroy(session: Session) -> tuple[bool, str]:
     """Destroy a disposable profile AND its quarantine, and VERIFY both are gone.
 
-    THE QUARANTINE PART IS NOT AN EXTRA. It was a measured defect: destroying a
-    disposable session removed the profile and reported "destroyed and verified gone"
-    while every file downloaded during that session stayed on disk forever, under
-    %LOCALAPPDATA%\\BRUHWSER\\quarantine\\<session id>. Nothing ever cleaned them up -
-    sweep_orphans only looked at profiles - and the quarantine panel only ever lists
-    the CURRENT session's folder, so those files became invisible to the UI while
-    remaining readable on disk. Web-downloaded content, surviving the session that was
-    sold as disposable, with no way to see it. That is a data-exposure bug and a false
-    claim at the same time, which is the defect class this project treats most
-    seriously.
+    THE QUARANTINE PART IS NOT AN EXTRA. Destroying a disposable session used to remove
+    the profile, report "destroyed and verified gone", and leave every file downloaded
+    during that session on disk forever - invisible to the UI, since the quarantine
+    panel only lists the CURRENT session, and never swept, since sweep_orphans only
+    looked at profiles. A data-exposure bug and a false claim at once.
 
-    Brief SS42: if deletion fails, report the failure. Never claim a session was
-    destroyed when it was not.
+    If deletion fails, report the failure. Never claim a session was destroyed when it
+    was not.
     """
     if not session.is_disposable:
         return False, "Persistent sessions are not destroyed."
@@ -401,15 +369,12 @@ def destroy(session: Session) -> tuple[bool, str]:
 def sweep_orphans() -> int:
     """Remove disposable profiles, and their quarantines, left behind by a crash.
 
-    Both halves matter. This used to sweep profiles only, so a session killed by a
-    crash, a forced termination or a Windows restart left its downloads behind
-    permanently - and because the quarantine panel only lists the CURRENT session,
-    they were unreachable from the UI while still sitting on disk. A "disposable"
-    session that leaves web-downloaded files around after a crash is not disposable.
+    Both halves matter. Sweeping profiles only left a crashed session's downloads on
+    disk permanently and unreachable from the UI, which is not disposable.
 
     Only folders named like a disposable session id (16 hex characters) are touched.
-    The persistent session's quarantine is named differently and is never swept, and
-    an unrecognised folder is left alone rather than guessed at.
+    The persistent quarantine is named differently and is never swept; an unrecognised
+    folder is left alone rather than guessed at.
     """
     removed = 0
 

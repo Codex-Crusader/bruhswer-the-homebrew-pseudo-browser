@@ -2,31 +2,22 @@
 
 Requires the network policy to be applied (tools/bruhswer-netpolicy.ps1 -Action apply).
 
-WHY THIS EXISTS SEPARATELY FROM THE OTHER TESTS
------------------------------------------------
-Two claims were being asserted rather than measured.
+Separate because two claims were being asserted rather than measured.
 
-SS13 asks for the self-bypass test to be run "through the browser process itself... Do
-not use an elevated process for the browser-side test." The app's `net.tamper` check
-INFERS tamper-resistance from "bruhswer is unelevated" plus the Stage 4 A17
-measurement. That is reasonable, but it is not a test. This file actually attempts the
-bypasses, unelevated, in the same token class as the browser process (Stage 4 gate A4
-measured the Edge browser process to be token-equivalent to an ordinary user process:
-same user SID, MEDIUM integrity, 0 restricting SIDs, 5 privileges).
+`net.tamper` INFERS tamper-resistance from "bruhswer is unelevated" plus the A17
+measurement. Reasonable, but not a test. This file actually attempts the bypasses,
+unelevated, in the same token class as the browser process - gate A4 measured the Edge
+browser process token-equivalent to an ordinary user process. It also covers the case
+A17 never tried: a PERMISSIVE REPLACEMENT rule, since deleting the block is not the only
+way out.
 
-It also covers the case Stage 4 never tried: creating a PERMISSIVE REPLACEMENT rule.
-Deleting the block is not the only way out - adding a broad Allow would be another.
+"Unrelated applications are not accidentally blocked" had no standing test at all. A
+change widening those rules from `-Program msedge.exe` to machine-wide would have gone
+unnoticed until the user's other software lost the network.
 
-SS12's last point, "unrelated applications are not accidentally blocked", had no
-standing test at all. If a future change widened those rules from `-Program msedge.exe`
-to machine-wide, nothing in the existing suite would have caught it, and the first
-symptom would be the user's other software losing the network.
-
-SAFETY
-------
-Every attempt here is EXPECTED to fail. If one unexpectedly succeeds, the test removes
+Every attempt here is EXPECTED to fail. If one unexpectedly succeeds the test removes
 what it created before reporting - it must never leave a permissive rule behind. It
-changes nothing on success paths, and needs no elevation.
+changes nothing on success paths and needs no elevation.
 """
 
 from __future__ import annotations

@@ -1,35 +1,26 @@
 """Property tests for address-bar normalisation.
 
-WHY PROPERTIES AND NOT MORE EXAMPLES
-    `tests/test_security.py` already checks specific refusals: javascript:, file:, a URL
-    that tries to smuggle a flag. Those are examples, and examples only ever prove the
-    cases someone thought of. `urls.normalise` sits on the one path where text a human
-    typed becomes an argv element handed to a browser process, so what matters is the
-    INVARIANTS that must hold for every input, including the ones nobody enumerated.
+test_security.py already checks specific refusals, but examples only prove the cases
+someone thought of. `urls.normalise` is where typed text becomes an argv element handed
+to a browser process, so what matters is the invariants that hold for every input.
 
-    The generator here is deliberately hostile and deliberately boring: it is a fixed,
-    seeded corpus rather than a random one, because a fuzz test that finds a different
-    failure on every run cannot be used as a release gate. New pathological inputs get
-    appended to the corpus; nothing is generated from the clock.
+The corpus is fixed and seeded rather than random: a fuzz test that finds a different
+failure on every run cannot be a release gate. New pathological inputs get appended;
+nothing is generated from the clock.
 
-THE INVARIANTS
-    P1  normalise() either returns a str or raises RefusedURL. No other exception type
-        escapes - a ValueError or an IndexError leaking out of URL parsing would reach
-        the UI as an unhandled crash.
+    P1  normalise() returns a str or raises RefusedURL. No other exception escapes - a
+        ValueError out of URL parsing would reach the UI as an unhandled crash.
     P2  Any returned value is http://, https://, or exactly "about:blank".
     P3  No returned value contains a control, invisible, or direction-changing char.
     P4  No returned value contains a newline or carriage return.
     P5  UNC paths, drive letters and forbidden schemes are ALWAYS refused.
-    P6  Anything normalise() returns must survive edge.build_command() without raising,
-        because that is where it actually goes. This is the invariant that ties the two
-        modules together: a URL this module blesses and the launcher then rejects would
-        be a crash on the navigate path.
+    P6  Anything normalise() returns survives edge.build_command() without raising.
+        This ties the two modules together: a URL this one blesses and the launcher
+        rejects would be a crash on the navigate path.
 
-WHAT THIS DOES NOT CLAIM
-    Homoglyph safety. "example.com" with a Cyrillic 'a' is ordinary visible text and is
-    NOT refused - see the honest-boundary note on urls._DECEPTIVE. Asserting that
-    lookalikes are caught would make this file the thing it exists to prevent: a test
-    whose passing implies a protection that was never built.
+It does NOT claim homoglyph safety - "example.com" with a Cyrillic 'a' is ordinary
+visible text and is not refused. Asserting otherwise would make this file the thing it
+exists to prevent: a test whose passing implies a protection that was never built.
 """
 
 from __future__ import annotations

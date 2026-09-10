@@ -1,12 +1,9 @@
-"""Controller — a fixed, closed set of verbs. Nothing else exists.
+"""Controller - a fixed, closed set of verbs. Nothing else exists.
 
-There is no execute_command, no run_shell, no run_powershell, no eval, no exec, and no
-way to ask the controller to run something of your choosing (brief SS15). The verbs are
-methods on this class; there is no dispatcher that maps an arbitrary string to code.
-
-This matters more here than in the earlier VM designs, because Stage 4 measured that a
-compromised browser process CAN reach localhost and that nothing can stop it. So the
-controller's attack surface has to be small by construction rather than by filtering.
+No execute_command, no run_shell, no run_powershell, no eval, no exec, and no
+dispatcher mapping an arbitrary string to code. A compromised browser process CAN reach
+localhost and nothing can stop it, so this surface has to be small by construction
+rather than by filtering.
 """
 
 from __future__ import annotations
@@ -44,13 +41,12 @@ class LaunchOutcome:
 class SessionSnapshot:
     """An immutable view of the session, for the UI.
 
-    BrowserWindow used to read `controller.session` directly and then dereference it
-    again a line or two later. Between those reads the panic hotkey, a teardown or a
-    failed launch can set it to None, so `if self.controller.session else` guards were
-    load-bearing in six places and each one was a chance to get it wrong.
+    Reading `controller.session` twice a line apart let the panic hotkey, a teardown or
+    a failed launch set it to None in between, so six `if ... else` guards were
+    load-bearing and each was a chance to get it wrong.
 
-    Cheap and subprocess-free on purpose: liveness costs a ~258ms PowerShell round trip,
-    so callers that need it ask `Controller.is_running()` themselves.
+    Cheap and subprocess-free on purpose: liveness costs a ~258ms round trip, so
+    callers that need it ask `Controller.is_running()` themselves.
     """
 
     active: bool
@@ -88,19 +84,14 @@ NO_SESSION = SessionSnapshot(
 class VerificationRequest:
     """An immutable snapshot of everything a verification pass needs.
 
-    EXISTS SO VERIFICATION CAN RUN OFF THE UI THREAD SAFELY.
+    Exists so verification can run off the UI thread safely. `Controller.verify()`
+    reads `self.session` while it runs, and the worker runs concurrently with `stop()`,
+    which DELETES a disposable profile directory - so a worker holding `self.session`
+    could be reading a path the UI thread is destroying.
 
-    `Controller.verify()` reads `self.session` and `self.privacy_mode` while it runs.
-    That is fine on one thread, but the re-verification worker runs concurrently with
-    `start()` and `stop()` - and `stop()` DELETES a disposable profile directory. A
-    worker holding `self.session` could therefore be reading a profile path that the UI
-    thread is in the middle of destroying, and would report checks about a session that
-    no longer exists.
-
-    So the UI thread builds one of these under its own control, hands it over by value,
-    and the worker calls `run_verification()` below, which touches no shared state at
-    all. `generation` lets a result that arrives after the session changed be dropped
-    rather than displayed.
+    The UI thread builds one of these and hands it over by value; `run_verification()`
+    touches no shared state at all. `generation` lets a result that arrives after the
+    session changed be dropped rather than displayed.
     """
 
     profile_dir: Path
@@ -336,26 +327,20 @@ class Controller:
     def panic_stop(self) -> tuple[bool, str]:
         """Stop this session's browser IMMEDIATELY. Deliberately not stop().
 
-        WHY NOT stop(): that path is graceful by design - it posts WM_CLOSE, waits up
-        to 8 seconds for the launcher, and then waits up to 12 more before force
-        targeting anything. Twenty seconds is not a panic. The graceful path exists for
-        good reasons (a clean exit avoids the profile being marked as crashed, which
-        would make the next launch offer to restore tabs), and this is an explicit,
-        documented exception to it rather than a replacement.
+        stop() is graceful by design - WM_CLOSE, then up to 8s for the launcher and 12
+        more before forcing anything. Twenty seconds is not a panic, so this is an
+        explicit exception to that path rather than a replacement.
 
-        THE ACCEPTED COST, stated rather than discovered later: force-killing leaves
-        the profile marked as crashed. `--hide-crash-restore-bubble` and
-        `session.restore_on_startup` already blunt what the user sees, and a disposable
-        profile is deleted immediately afterwards anyway. For a panic control that is
-        the right trade.
+        The accepted cost: force-killing leaves the profile marked as crashed.
+        `--hide-crash-restore-bubble` blunts what the user sees, and a disposable
+        profile is deleted immediately afterwards.
 
-        WHAT IT WILL NOT DO: touch any Edge process it cannot prove belongs to this
-        session. Attribution is by exact `--user-data-dir` match plus a process
-        creation time re-checked against the opened handle, so a recycled PID - even
-        one that became another msedge.exe, i.e. the user's own browser - is refused.
+        It will not touch any Edge process it cannot prove belongs to this session.
+        Attribution is an exact `--user-data-dir` match plus a creation time re-checked
+        against the opened handle, so a recycled PID - even one that became another
+        msedge.exe - is refused.
 
-        The returned message describes only what was OBSERVED. If the profile could not
-        be destroyed because files were still locked, it says so; it never prints
+        The returned message describes only what was OBSERVED, and never prints
         "destroyed and verified gone" on the strength of having asked.
         """
         session = self.session
@@ -396,17 +381,11 @@ class Controller:
             parts.append(f"{report.already_gone} could not be opened")
         message = "; ".join(parts) + "."
 
-        # WHETHER THIS COUNTS AS SUCCESS. Returning True here on the strength of having
-        # ASKED is the panic-shaped version of this project's oldest defect, and a real
-        # walkthrough produced exactly that: "0 terminated; 9 left alone" was reported
-        # as a green success while nine Edge processes were still running and the
-        # controller had already forgotten the session.
-        #
-        # So success requires every process observed to be in a terminal state:
-        # everything terminated was confirmed exited, nothing was refused, nothing
-        # failed, and nothing was left unopenable (an OpenProcess failure may mean the
-        # process is gone, but it may equally mean bruhswer could not look - and
-        # "could not look" is not "it stopped").
+        # Success requires every process observed to be in a terminal state. Returning
+        # True on the strength of having ASKED reported "0 terminated; 9 left alone" as
+        # a green success with nine Edge processes still running. An OpenProcess
+        # failure may mean the process is gone, but it may equally mean bruhswer could
+        # not look, and "could not look" is not "it stopped".
         clean = (report.refused == 0 and report.failed == 0
                  and report.already_gone == 0
                  and report.confirmed_exited == report.terminated)
@@ -563,13 +542,11 @@ def summarise(result: verifier.VerificationResult) -> list[tuple[str, Verdict, s
 
 
 def fixed_status_rows(session) -> list[tuple[str, str, str, str]]:
-    """Rows that are statements of fact, not verdicts (brief SS34).
+    """Rows that are statements of fact, not verdicts.
 
-    Returns (label, value, colour_kind, blurb). `colour_kind` is one of
-    "ok" / "warn" / "off" - deliberately NOT a Verdict, because none of these is a
-    check that passed or failed. LOCALHOST in particular must never render green:
-    it is a measured platform limitation, and pretending otherwise is the one thing
-    this project refuses to do.
+    Returns (label, value, colour_kind, blurb). `colour_kind` is "ok"/"warn"/"off",
+    deliberately NOT a Verdict, because none of these passed or failed. LOCALHOST must
+    never render green - it is a measured platform limitation.
     """
     if session is None:
         session_value, session_blurb = "NONE", "No session is open"

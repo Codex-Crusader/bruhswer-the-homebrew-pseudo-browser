@@ -1,8 +1,7 @@
 """Performance baseline: is bruhswer practical for daily use?
 
-Brief SS28: "Do not obsess over microbenchmarks. The goal is simply to determine
-whether bruhswer is practical for daily use." So this measures a handful of things a
-user would actually notice, and nothing else.
+Not microbenchmarks - a handful of things a user would actually notice, and nothing
+else.
 
     session setup      how long bruhswer's own work takes (ACL + privacy settings)
     cold start         launch to a fully rendered local page
@@ -11,11 +10,9 @@ user would actually notice, and nothing else.
     CPU at idle        CPU seconds consumed while sitting on a blank page
 
 Compared across Stock Edge / bruhswer Standard / bruhswer Disposable, all driven the
-same way. "Stock Edge" is a fresh temporary profile with Edge's own defaults, so the
-comparison isolates what bruhswer adds.
-
-Process attribution is by `--user-data-dir` in the command line, so the user's own
-running browser is never measured or touched.
+same way, where "Stock Edge" is a fresh temporary profile with Edge's own defaults so
+the comparison isolates what bruhswer adds. Process attribution is by `--user-data-dir`,
+so the user's own running browser is never measured or touched.
 
 Unelevated. Creates and deletes its own temp profiles. Changes nothing on the host.
 """

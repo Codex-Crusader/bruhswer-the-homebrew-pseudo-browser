@@ -1,9 +1,7 @@
 """A small AST linter for bruhswer, using only the standard library.
 
-Why not just install a linter: bruhswer's dependency policy exists because gate B17
-rejected a whole backend over an unverifiable third-party binary. That policy is about
-what ships, not about tooling - but `ast` covers the mechanical findings well enough
-that adding a package would be paying a real cost for a small gain.
+`ast` covers the mechanical findings well enough that adding a package would be a real
+cost for a small gain.
 
 Finds, per file:
     unused imports
@@ -160,13 +158,9 @@ def check_static_candidates(tree: ast.AST, report: FileReport) -> None:
 #     except Exception:            # lint: allow broad-except - reason
 #     win._placeholder = False     # lint: allow protected-access - drives the real UI
 #
-# PER SITE, and deliberately not a global switch for a rule. Turning a rule off across
-# the project would silence the NEXT occurrence too - a new broad `except` in shipped
-# code, or a new reach into another module's internals - which is the opposite of what
-# a linter is for. An inline marker keeps the rule live everywhere else and leaves the
-# exemption visible on the line it applies to, where a reviewer will actually see it.
-#
-# The trailing reason is not parsed; it is there for the human reading the line.
+# PER SITE, not a global switch: turning a rule off project-wide would silence the NEXT
+# occurrence too. An inline marker keeps the rule live everywhere else and leaves the
+# exemption on the line it applies to. The trailing reason is not parsed.
 _SUPPRESS = "# lint: allow "
 
 
@@ -246,18 +240,13 @@ def check_instance_attrs(tree: ast.AST, report: FileReport) -> None:
 def _run_ruff() -> int | None:
     """Run ruff if it is installed. Returns its exit code, or None if it is absent.
 
-    THIS IS HERE BECAUSE THE TWO LINTERS DISAGREED AND ONLY ONE GATED THE BUILD.
+    The two linters disagreed and only one gated the build: ruff is configured in
+    pyproject.toml and run in CI but was installed nowhere locally, so this file was
+    the linter a developer ran and ruff was the one that decided the build. Two
+    releases went out red over findings a local run would have shown in a second.
 
-    Ruff is configured in pyproject.toml and run in CI, but was installed nowhere
-    locally - so this file was the linter a developer ran, ruff was the linter that
-    decided whether the build passed, and they check different things. Two releases
-    went out with a red build over ruff findings that a local run would have shown in a
-    second.
-
-    Running it from here means one command gives the verdict CI gives. If ruff is not
-    installed the report SAYS SO rather than quietly reporting a clean tree, because
-    "no findings" and "nothing looked" must never render the same - the same rule the
-    application itself is built around.
+    If ruff is absent the report SAYS SO rather than printing a clean tree, because "no
+    findings" and "nothing looked" must never render the same.
     """
     try:
         proc = subprocess.run(

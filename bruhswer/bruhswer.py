@@ -6,15 +6,10 @@
     python bruhswer.py --hostguard  host exposure only, no browser involved
     python bruhswer.py --uninstall  show and remove everything bruhswer left
 
---check exists so the security verification can be run headless, in tests and in CI,
-without a display.
-
---hostguard exists because Host Guard answers a different question from the rest of
-bruhswer: not "what can a website reach?" but "what can the laptop at the next table
-reach?". That question matters whether or not the browser is running (brief SS11), so
-it must be answerable without starting one.
-
-Neither mode launches a browser, and neither changes anything.
+--check runs the security verification headless, for tests and CI. --hostguard answers
+a different question from the rest of bruhswer - not "what can a website reach?" but
+"what can the laptop at the next table reach?" - which matters whether or not the
+browser is running. Neither launches a browser, and neither changes anything.
 """
 
 from __future__ import annotations
@@ -37,20 +32,15 @@ _MARK = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.UNKNOWN: "UNKNOWN"}
 def _use_utf8_stdio() -> None:
     """Make the text modes UTF-8 before anything is printed.
 
-    MEASURED: `python bruhswer.py --check > out.txt` crashed with UnicodeEncodeError
-    before printing a single line. When stdout is a pipe or a file rather than a
-    console, Python picks the legacy ANSI codepage (cp1252 here), which cannot encode
-    the moai in config.MOAI. Every text mode - --check, --hostguard, --uninstall - died
-    on its first print, and so did the whole regression suite under CI, where stdout is
-    always a pipe.
+    Measured: `python bruhswer.py --check > out.txt` died with UnicodeEncodeError
+    before one line. Redirected, Python picks the legacy ANSI codepage, which cannot
+    encode the moai - so every text mode died on its first print, and so did the whole
+    suite under CI, where stdout is always a pipe.
 
-    The fix belongs here rather than in the strings: dropping the emoji would hide the
-    defect while leaving every other non-ASCII character in the security output
-    (arrows, bullets, accented CA subject names) able to kill a security report
-    mid-sentence. A truncated security verdict is a worse failure than a missing glyph.
-
-    `errors="replace"` so that even an unexpected character degrades to a visible
-    placeholder instead of terminating the report.
+    Fixed here rather than in the strings: dropping the emoji would hide the defect
+    while leaving arrows, bullets and accented CA subject names able to kill a security
+    report mid-sentence. `errors="replace"` so an unexpected character degrades to a
+    placeholder instead of terminating it.
     """
     for stream in (sys.stdout, sys.stderr):
         # getattr rather than a direct call. `reconfigure` is a TextIOWrapper method,

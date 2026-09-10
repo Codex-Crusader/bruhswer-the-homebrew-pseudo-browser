@@ -1,18 +1,13 @@
-"""Drive the REAL bruhswer GUI the way §36 asks, and report what actually happened.
+"""Drive the REAL bruhswer GUI and report what actually happened.
 
-This is not a unit test. It builds the real BrowserWindow, lets Tk run, and pokes the
-things a person would poke - with particular attention to the two surfaces changed in
-this pass and NOT covered by any existing suite:
-
-  * the new disposable-download confirmation dialog (and the input-queue detach/
-    re-attach around it, which is the part that could hang the window)
-  * the rewritten privacy panel, which now reads settings back from the profile
-
-Nothing here asserts. It reports, so a surprise is visible rather than swallowed.
+Not a unit test: it builds the real BrowserWindow, lets Tk run, and pokes what a person
+would poke. Nothing here asserts - it reports, so a surprise is visible rather than
+swallowed.
 """
 from __future__ import annotations
 
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -27,6 +22,14 @@ from app.downloads import quarantine  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
 from app.ui.browser_window import BrowserWindow  # noqa: E402
 
+HOST_TIMEOUT_S = 22.0
+PANEL_TIMEOUT_S = 20.0
+REVERIFY_TIMEOUT_S = 40.0
+
+# The confirmation dialog, identified by title so nothing else can be driven in its
+# place. See drive_cancel.
+DIALOG_TITLE = f"{config.MOAI} bruhswer"
+
 log: list[str] = []
 
 
@@ -36,6 +39,43 @@ def say(step: str, ok: bool, detail: str = "") -> None:
     print(log[-1], flush=True)
 
 
+def toplevels(win) -> list[tk.Toplevel]:
+    return [c for c in win.root.winfo_children() if isinstance(c, tk.Toplevel)]
+
+
+def pump_until(win, seconds: float, ready) -> bool:
+    """Run Tk until `ready()` or the deadline. True if it became ready."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        win.root.update()
+        if ready():
+            return True
+        time.sleep(0.1)
+    return ready()
+
+
+def wait_for_host(win) -> bool:
+    return pump_until(win, HOST_TIMEOUT_S, lambda: win.hosted_hwnd is not None)
+
+
+def open_panel(win, opener, timeout: float = PANEL_TIMEOUT_S) -> bool:
+    """Open one panel, wait for its window, then close it again.
+
+    open_security_panel runs a 5.5s verification off the Tk thread first, so the old
+    look-once check could never pass - and the panel that arrived afterwards was left
+    parented to root, where drive_cancel destroyed it INSTEAD of the dialog and hung
+    the run at step 14. Steps 6 and 27 both did this; 27 reported True regardless.
+    """
+    before = {str(c) for c in toplevels(win)}
+    opener()
+    appeared = pump_until(
+        win, timeout, lambda: bool({str(c) for c in toplevels(win)} - before))
+    for child in toplevels(win):
+        child.destroy()
+    win.root.update()
+    return appeared
+
+
 def main() -> int:
     print("bruhswer real-world GUI walkthrough (§36)")
     print("=" * 74, flush=True)
@@ -43,15 +83,7 @@ def main() -> int:
     win = BrowserWindow()
     say("1. window constructed", win.root is not None)
 
-    # Let startup run: verification, session start, then window hosting.
-    for _ in range(220):          # ~22s of real Tk time
-        win.root.update()
-        win.root.after(100, lambda: None)
-        win.root.update_idletasks()
-        import time
-        time.sleep(0.1)
-        if win.hosted_hwnd:
-            break
+    wait_for_host(win)
 
     result = win.result
     say("2. security verification ran", result is not None,
@@ -66,19 +98,11 @@ def main() -> int:
     # ---- panels -------------------------------------------------------------
     for step, opener in (("6. BRUH check panel", win.open_security_panel),
                          ("7. network panel", win.open_network_panel),
-                         ("8. privacy panel (REWRITTEN)", win.open_privacy_panel),
+                         ("8. privacy panel", win.open_privacy_panel),
                          ("9. host guard panel", win.open_host_panel),
                          ("10. quarantine panel", win.open_quarantine_panel)):
         try:
-            before = len(win.root.winfo_children())
-            opener()
-            win.root.update()
-            say(step, len(win.root.winfo_children()) > before)
-            # close the panel again
-            for child in win.root.winfo_children():
-                if isinstance(child, tk.Toplevel):
-                    child.destroy()
-            win.root.update()
+            say(step, open_panel(win, opener))
         # broad-except: a harness reports failures, it does not die on them
         except Exception:  # lint: allow broad-except
             say(step, False, traceback.format_exc().strip().splitlines()[-1])
@@ -97,21 +121,13 @@ def main() -> int:
         say("11. address bar navigation", False,
             traceback.format_exc().strip().splitlines()[-1])
 
-    # ---- THE NEW DIALOG -----------------------------------------------------
-    # Switch to a disposable session, put a file in its quarantine, then close it.
+    # ---- the disposable-download confirmation dialog -------------------------
     try:
         win.open_session(session_manager.DISPOSABLE)
-        for _ in range(120):
-            win.root.update()
-            import time
-            time.sleep(0.1)
-            if win.hosted_hwnd:
-                break
+        wait_for_host(win)
         session = win.controller.session
         assert session is not None, "no session after opening one"
-        say("12. disposable session open",
-            session is not None and session.is_disposable,
-            session.session_id if session else "none")
+        say("12. disposable session open", session.is_disposable, session.session_id)
 
         qdir = quarantine.quarantine_dir_for(session.session_id)
         planted = qdir / "walkthrough-download.txt"
@@ -120,31 +136,26 @@ def main() -> int:
         say("13. quarantine has a file to warn about", len(pending) == 1,
             f"{[p.name for p in pending]}")
 
-        # Fire the confirmation dialog and drive its CANCEL button, which is the
-        # path that must re-attach the input queue.
-        dialog_outcome: dict[str, bool | None] = {"returned": None}
-
+        # Destroying the dialog is equivalent to its Keep-open button. Matched BY
+        # TITLE: any other Toplevel still on screen is not the dialog, and destroying
+        # one in its place leaves the modal wait blocked forever.
         def drive_cancel():
-            # Find the modal Toplevel the dialog created and click "Keep open".
-            for child in win.root.winfo_children():
-                if isinstance(child, tk.Toplevel):
-                    child.destroy()          # equivalent to the Keep-open button
+            for child in toplevels(win):
+                if child.title() == DIALOG_TITLE:
+                    child.destroy()
                     return
             win.root.after(200, drive_cancel)
 
         win.root.after(600, drive_cancel)
         # protected-access: drives the real window's internals on purpose.
-        dialog_outcome["returned"] = (
-            win._confirm_disposable_downloads())  # lint: allow protected-access
+        returned = win._confirm_disposable_downloads()  # lint: allow protected-access
         win.root.update()
         say("14. dialog opened and CANCEL returned False (session kept)",
-            dialog_outcome["returned"] is False,
-            f"returned {dialog_outcome['returned']!r}")
+            returned is False, f"returned {returned!r}")
         say("15. window still responsive after the modal dialog",
             win.root.winfo_exists() == 1)
         say("16. download still present after cancelling", planted.is_file())
 
-        # Now actually close the session, accepting the destruction.
         win.controller.stop()
         win.root.update()
         say("17. disposable profile destroyed", not session.profile_dir.exists(),
@@ -155,21 +166,13 @@ def main() -> int:
         say("12-18. disposable flow", False,
             traceback.format_exc().strip().splitlines()[-1])
 
-    # ---- surfaces added in the hardening pass --------------------------------
-    # None of these existed when this script was written, and none of them is
-    # reachable from the unit suites: they are threads, Win32 registrations and
-    # widgets that only exist once a real window is up.
+    # ---- threads, Win32 registrations and widgets no unit suite can reach -----
     try:
         win.open_session(session_manager.PERSISTENT)
-        for _ in range(120):
-            win.root.update()
-            import time
-            time.sleep(0.1)
-            if win.hosted_hwnd:
-                break
+        wait_for_host(win)
 
-        # 20. The panic key. Its INDICATOR must match reality - a green PANIC light
-        # over an unregistered hotkey is a promise bruhswer cannot keep.
+        # A green PANIC light over an unregistered hotkey is a promise bruhswer
+        # cannot keep, so the indicator is checked against the registration.
         # protected-access: drives the real window's internals on purpose
         armed = win._panic_hotkey.available  # lint: allow protected-access
         hint = win.panic_hint.cget("text")
@@ -180,59 +183,42 @@ def main() -> int:
             or (not armed and hint == "UNAVAILABLE"),
             f"armed={armed} hint={hint!r}")
 
-        # 22. Re-verification is actually running, not just constructed.
         say("22. re-verification worker alive",
             win._verifier._thread is not None  # lint: allow protected-access
             and win._verifier._thread.is_alive())  # lint: allow protected-access
         say("23. drain callback scheduled",
             win._drain_job is not None)  # lint: allow protected-access
 
-        # 24. Wait for a SECOND verification pass to land from the worker and be
-        # applied to the widgets. This is the whole feature: the lights must stop
-        # being a launch-time snapshot.
+        # The whole feature: the lights must stop being a launch-time snapshot, so a
+        # SECOND pass has to land from the worker and reach the widgets.
         live = win.controller.session
         assert live is not None, "no session to re-verify"
         win._verifier.submit(  # lint: allow protected-access
             win.controller.verification_request(live.mode))
-        applied = False
-        import time
-        deadline = time.time() + 40
         first = win.result
-        while time.time() < deadline:
-            win.root.update()
-            time.sleep(0.1)
-            if win.result is not None and win.result is not first:
-                applied = True
-                break
+        applied = pump_until(win, REVERIFY_TIMEOUT_S,
+                             lambda: win.result is not None and win.result is not first)
         say("24. a worker verification reached the UI", applied,
             f"{len(win.result.checks)} checks" if win.result else "none")
 
-        # 25. The new checks must be VISIBLE, not just present in the result.
         ids = {c.check_id for c in (win.result.checks if win.result else [])}
         say("25. integrity check present", "controller.integrity" in ids)
         say("26. ipv6 effect check present", "net.rule.ipv6.effect" in ids)
 
-        # 27. Every panel must still render with the new checks in the result.
         for name, opener in (("BRUH", win.open_security_panel),
                              ("network", win.open_network_panel),
                              ("privacy", win.open_privacy_panel),
                              ("host", win.open_host_panel),
                              ("quarantine", win.open_quarantine_panel)):
             try:
-                opener()
-                win.root.update()
-                for child in win.root.winfo_children():
-                    if isinstance(child, tk.Toplevel):
-                        child.destroy()
-                win.root.update()
-                say(f"27.{name} panel renders with the new checks", True)
+                say(f"27.{name} panel renders with the new checks",
+                    open_panel(win, opener))
             # broad-except: a harness reports failures, it does not die on them
             except Exception:  # lint: allow broad-except
                 say(f"27.{name} panel renders with the new checks", False,
                     traceback.format_exc().strip().splitlines()[-1])
 
-        # 28. The account banner must agree with the measured verdict, in both
-        # directions - shown when an account is attached, hidden when not.
+        # Both directions: shown when an account is attached, hidden when not.
         account = [c for c in win.result.checks
                    if c.check_id == "privacy.account"] if win.result else []
         shown = bool(win.account_banner.winfo_ismapped())
@@ -241,8 +227,7 @@ def main() -> int:
             f"shown={shown} verdict="
             f"{account[0].verdict if account else 'none'}")
 
-        # 29. THE PANIC PATH ITSELF, on a real session with a real hosted browser.
-        # This terminates Edge, so it is deliberately the last thing done.
+        # The panic path on a real session. It terminates Edge, so it goes last.
         session = win.controller.session
         profile = session.profile_dir if session else None
         # protected-access: drives the real window's internals on purpose
@@ -252,7 +237,6 @@ def main() -> int:
             win.status_text.cget("text")[:70])
         say("30. window survived the panic", win.root.winfo_exists() == 1)
         if profile is not None:
-            import time
             time.sleep(1.0)
             remaining = embed.attributed_edge_processes(profile)
             say("31. no attributed browser process left",
@@ -261,17 +245,10 @@ def main() -> int:
         say("32. panic released the hotkey",
             not win._panic_hotkey.available)  # lint: allow protected-access
 
-        # 32b. THE INDICATOR MUST FOLLOW THE HOTKEY, on every path that releases it.
-        # close_session() used to stop the listener and leave the PANIC dot green with
-        # the hint still reading Ctrl+Shift+End - a light promising an escape hatch
-        # that had already been unregistered.
+        # close_session() used to release the hotkey and leave the PANIC dot green
+        # with the hint still reading Ctrl+Shift+End.
         win.open_session(session_manager.PERSISTENT)
-        for _ in range(120):
-            win.root.update()
-            import time
-            time.sleep(0.1)
-            if win.hosted_hwnd:
-                break
+        wait_for_host(win)
         # protected-access: drives the real window's internals on purpose
         armed_before = win._panic_hotkey.available  # lint: allow protected-access
         win.close_session()

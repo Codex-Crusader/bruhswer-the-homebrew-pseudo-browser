@@ -41,21 +41,14 @@ EXECUTABLE_SUFFIXES = {
 }
 
 # --- content sniffing -----------------------------------------------------------
-# An extension is a CLAIM MADE BY THE WEBSITE. It is the least trustworthy thing about
-# a download, and it is what `is_executable_type` above relies on entirely: a site that
-# serves a PE image named "invoice.pdf" gets no warning from a suffix check, because the
-# suffix is exactly the part the site controls.
+# An extension is a CLAIM MADE BY THE WEBSITE, and it is all `is_executable_type` has:
+# a PE image named "invoice.pdf" draws no warning from a suffix check. So the first
+# bytes are read too.
 #
-# So the first bytes are read too. These are FILE FORMAT signatures, not malware
-# signatures, and the distinction is the whole point:
-#
-#   what this CAN say   "these bytes are a Windows executable image"      (a fact)
-#   what it CANNOT say  "this file is malware" / "this file is safe"      (not measured)
-#
-# bruhswer does not scan, does not reputation-check, and does not sandbox-detonate. It
-# reports the format it found and whether that format disagrees with the name. A clean
-# result here means "nothing recognised", never "safe" - brief SS37, and the module
-# docstring above says the same thing.
+# FILE FORMAT signatures, not malware signatures. This can say "these bytes are a
+# Windows executable image", which is a fact; it cannot say "this file is malware" or
+# "this file is safe", neither of which is measured. A clean result here means "nothing
+# recognised", never "safe".
 _MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"MZ", "Windows executable (PE)"),
     (b"\x7fELF", "ELF executable"),
@@ -75,6 +68,12 @@ _EXECUTABLE_KINDS = frozenset({
     "Windows executable (PE)", "ELF executable", "Java class / Mach-O fat binary",
 })
 
+# Derived from the table, not written next to it. It was a literal 8, which happened to
+# equal the longest signature above - so adding a longer one would have left it silently
+# unmatchable, with sniff_kind reporting "nothing recognised" for the format it had just
+# been taught.
+_MAGIC_BYTES = max(len(signature) for signature, _label in _MAGIC)
+
 
 def sniff_kind(path: Path) -> str | None:
     """The file format the BYTES say this is, or None if nothing is recognised.
@@ -84,7 +83,7 @@ def sniff_kind(path: Path) -> str | None:
     """
     try:
         with path.open("rb") as handle:
-            head = handle.read(8)
+            head = handle.read(_MAGIC_BYTES)
     except OSError:
         return None
     if not head:
@@ -121,14 +120,12 @@ class QuarantinedFile:
     def extension_mismatch(self) -> bool:
         """The bytes are executable and the name does NOT admit it.
 
-        This is the case worth a distinct warning: `is_executable_type` alone stays
-        quiet for a PE image called "invoice.pdf", because it only ever looked at the
-        part of the download the website chose.
+        Worth a distinct warning, because `is_executable_type` stays quiet for a PE
+        called "invoice.pdf".
 
-        Deliberately one-directional. An .exe whose bytes are a PE is consistent and
-        already flagged by name; a .zip that sniffs as a ZIP is consistent; and an
-        unrecognised format is NOT reported as a mismatch, because "bruhswer did not
-        recognise these bytes" is not evidence of anything.
+        One-directional on purpose: an .exe whose bytes are a PE is consistent and
+        already flagged by name, and an unrecognised format is NOT a mismatch, because
+        "bruhswer did not recognise these bytes" is not evidence of anything.
         """
         return self.is_executable_content and not self.is_executable_type
 
@@ -146,13 +143,11 @@ class QuarantinedFile:
 def folder_name_for(session_id: str) -> str:
     """The on-disk quarantine folder name for a session id. Naming only, no I/O.
 
-    The single derivation. session_manager used to keep its own copy of this logic
-    (`_safe_session_folder`) to avoid importing this module, justified by a comment
+    The single derivation. session_manager kept its own copy, justified by a comment
     claiming a session id is "always 16 hex characters" - true for disposable sessions,
-    not for the persistent one ("persistent000000"). Both of that copy's callers
-    happened to be guarded to disposable sessions only, so the divergence was never
-    live, but it existed behind a comment asserting it could not. Importing this one,
-    rather than hand-copying it a second time, is the fix.
+    not for "persistent000000". Both callers happened to be guarded to disposable
+    sessions, so the divergence was never live, but it existed behind a comment
+    asserting it could not.
     """
     return _SAFE_CHARS.sub("", session_id)[:32] or "session"
 
@@ -238,17 +233,12 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     if not dest_dir.is_dir():
         return False, "Destination is not a folder."
 
-    # The DESTINATION gets the same reparse-point treatment as the source. The folder
-    # picker hands back whatever the user selected, and a junction is a perfectly
-    # ordinary-looking folder in the Windows picker - selecting one would land the
-    # export somewhere the user did not choose and did not see.
-    #
-    # `is_symlink()` is NOT sufficient and is not used: measured in this project,
-    # Path.is_symlink() returns False for a directory junction made with `mklink /J`.
-    # config.FILE_ATTRIBUTE_REPARSE_POINT is the test that actually fires.
-    #
-    # Checked on the path AS SELECTED with follow_symlinks=False, before resolve()
-    # follows the link away and destroys the evidence that there was one.
+    # The destination gets the same treatment as the source: a junction looks like an
+    # ordinary folder in the Windows picker, and selecting one would land the export
+    # somewhere the user did not choose. is_symlink() is NOT sufficient - measured, it
+    # returns False for a directory junction - so the reparse-point attribute is the
+    # test that fires. Checked AS SELECTED, before resolve() follows the link away and
+    # destroys the evidence that there was one.
     try:
         attrs = destination_dir.stat(follow_symlinks=False).st_file_attributes
         if attrs & config.FILE_ATTRIBUTE_REPARSE_POINT:

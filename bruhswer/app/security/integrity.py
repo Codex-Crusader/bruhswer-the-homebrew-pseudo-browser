@@ -1,45 +1,21 @@
 """Do bruhswer's own files still match the manifest they shipped with?
 
-WHAT THIS DETECTS, AND WHAT IT DOES NOT
-    This is INSTALLATION-DRIFT DETECTION. It catches a half-finished copy, a file
-    truncated by a disk error, an editor left open on the wrong window, a partial
-    upgrade that mixed two versions, and untargeted malware that rewrites .py files
-    without knowing what bruhswer is.
+INSTALLATION-DRIFT DETECTION: a half-finished copy, a file truncated by a disk error,
+a partial upgrade that mixed two versions, untargeted malware that rewrites .py files.
 
-    It does NOT detect a targeted attacker, and nothing in this module may be worded as
-    if it does. The manifest sits beside the code it describes, and the code that reads
-    the manifest sits beside both. Anyone who can edit `verifier.py` can edit
-    `MANIFEST.sha256` and this file in the same motion, and the check will report PASS
-    afterwards. That is not a flaw to be fixed here - it is the ceiling of what any
-    self-check can do without a trust anchor outside the thing being checked, and
-    bruhswer has no such anchor. It runs unelevated, in a directory the user owns, on a
-    platform where the threat model already states that an attacker running as the user
-    is not defended against.
+It does NOT detect a targeted attacker, and nothing here may be worded as if it does.
+The manifest sits beside the code it describes, and the code that reads it beside both,
+so anyone who can edit `verifier.py` can edit `MANIFEST.sha256` and this file in the
+same motion. That is the ceiling of any self-check with no trust anchor outside the
+thing being checked. Hence the verdict is NON-CRITICAL: the failure it most likely
+represents is a bad copy, not an intrusion.
 
-    So the verdict is NON-CRITICAL. A mismatch is worth telling the user about; it is
-    not worth refusing to launch over, because the failure it most likely represents is
-    a bad copy rather than an intrusion, and because a determined attacker would simply
-    have regenerated the manifest.
-
-WHY THE WHOLE PACKAGE, NOT A "TCB" SUBSET
-    The obvious design is to hash the security-relevant modules - verifier, browser
-    guard, edge, verdict. That is a trap. Every module under `app/` is imported into
-    the same process and runs with the same privileges, so `app/ui/panels/host_panel.py`
-    can do anything `verifier.py` can. Hashing four files and calling the result an
-    integrity check would be a green light covering a fraction of what actually runs,
-    which is precisely the class of indicator this project treats as a vulnerability.
-
-    Everything under `app/` that Python will import is covered, PLUS the `bruhswer.py`
-    entry point, and a .py file present on disk but ABSENT from the manifest is a
-    mismatch, not an oversight. Otherwise adding a new file would be the way past the
-    check.
-
-SCOPE, STATED PRECISELY SO IT IS NOT READ AS MORE
-    Covered: `bruhswer.py` and `app/**/*.py`.
-    NOT covered: `tests/`, `tools/`, the Python interpreter, the standard library, and
-    every DLL the process loads. So this is not "the install is intact" - it is "the
-    Python source that runs matches the list beside it". The check's title says exactly
-    that and nothing broader.
+Every module under `app/` is imported into the same process with the same privileges,
+so hashing a hand-picked "TCB" subset would be a green light over a fraction of what
+runs. Covered: `bruhswer.py` and `app/**/*.py`, with a .py file present on disk but
+absent from the manifest counted as a mismatch - otherwise adding a file is the way
+past the check. NOT covered: `tests/`, `tools/`, the interpreter, the standard library
+and every DLL loaded. So this is not "the install is intact".
 """
 
 from __future__ import annotations
@@ -54,14 +30,9 @@ from ..verdict import Check, EvidenceKind, UnknownReason, Verdict
 
 _log = get_logger("integrity")
 
-# parents[1] is app/, parents[2] is the bruhswer package root that also holds the
-# entry point. The manifest covers BOTH: app/**/*.py and bruhswer.py.
-#
-# bruhswer.py is included deliberately. It is the entry point - the first code that
-# runs - so a manifest that covered only `app/` while leaving it unhashed would have an
-# unchecked hole at the most load-bearing file in the install, while sounding
-# comprehensive. That is the same "green light over a fraction of what runs" mistake as
-# hashing a hand-picked TCB subset.
+# The manifest covers app/**/*.py AND bruhswer.py: the entry point is the first code
+# that runs, so leaving it unhashed would be an unchecked hole at the most load-bearing
+# file in the install.
 APP_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = APP_ROOT.parent
 
@@ -85,13 +56,16 @@ class IntegrityReport:
     changed: tuple[str, ...] = field(default_factory=tuple)
     missing: tuple[str, ...] = field(default_factory=tuple)
     unexpected: tuple[str, ...] = field(default_factory=tuple)
-    # Present on disk, listed in the manifest, and could NOT be read. This is a
-    # separate bucket from `missing` on purpose: "the file is gone" is a finding,
-    # "bruhswer could not open the file" is a failed measurement, and collapsing the
-    # second into the first would report a definite difference that was never
-    # established. It drives UNKNOWN, not FAIL.
+    # Listed, present, and could NOT be read. A separate bucket from `missing`: "the
+    # file is gone" is a finding, "could not open it" is a failed measurement. Drives
+    # UNKNOWN, not FAIL.
     unreadable: tuple[str, ...] = field(default_factory=tuple)
     manifest_present: bool = True
+    # The manifest is THERE and unusable - unreadable, not UTF-8, or parsing to
+    # nothing. `manifest_present` is False for this too, but the facts differ: an
+    # absent manifest is normal in a source checkout, a ruined one in an install is a
+    # finding, and the check must not explain the second away as the first.
+    manifest_unreadable: bool = False
 
     @property
     def ok(self) -> bool:
@@ -131,14 +105,10 @@ def _relative_key(path: Path, root: Path) -> str:
 def hash_file(path: Path) -> str | None:
     """SHA-256 of one source file, with line endings normalised. None if unreadable.
 
-    MEASURED: git stores LF and checks CRLF out into the working tree here
-    (`git ls-files --eol` reports `i/lf w/crlf`), so hashing raw bytes would make every
-    fresh clone report FAIL on a perfectly good copy - a check that cries wolf on a
-    clean install teaches the user to ignore the one indicator that matters.
-
-    Hashing CONTENT still detects a changed byte, a truncation, an inserted line or a
-    rewritten function. It deliberately does not detect a pure line-ending conversion,
-    which git performs routinely and which is not a change to the code.
+    Measured: git stores LF and checks CRLF out here, so hashing raw bytes would make
+    every fresh clone report FAIL on a perfectly good copy. Hashing CONTENT still
+    detects a changed byte, a truncation or an inserted line; it deliberately does not
+    detect a pure line-ending conversion, which is not a change to the code.
     """
     digest = hashlib.sha256()
     try:
@@ -200,11 +170,14 @@ def check_tree(root: Path = PACKAGE_ROOT,
     """Compare what is on disk against the manifest. Never raises."""
     try:
         recorded = parse_manifest(manifest_path.read_text(encoding="utf-8"))
-    except OSError:
-        return IntegrityReport(manifest_present=False)
+    except (OSError, UnicodeDecodeError):
+        # UnicodeDecodeError is NOT an OSError: a non-UTF-8 manifest used to escape
+        # this handler and raise out of startup verification.
+        return IntegrityReport(manifest_present=False,
+                               manifest_unreadable=manifest_path.exists())
 
     if not recorded:
-        return IntegrityReport(manifest_present=False)
+        return IntegrityReport(manifest_present=False, manifest_unreadable=True)
 
     on_disk = {_relative_key(p, root): p for p in _iter_sources(root)}
 
@@ -238,17 +211,9 @@ def check_tree(root: Path = PACKAGE_ROOT,
         unreadable=tuple(unreadable))
 
 
-# TITLE WORDING IS DELIBERATE and is not a style choice.
-#
-# It is NOT "self-integrity", NOT "tamper protection", NOT "installation is trusted".
-# Every one of those names describes a property this check cannot establish: the
-# manifest, the checker, and the code being checked all sit in the same
-# user-writable directory, with no trust anchor outside the thing being verified.
-# A title that promises attacker resistance would be a false indicator regardless of
-# how carefully the detail text below is hedged, because titles are what people read.
-#
-# What it honestly says is narrower and still useful: these files either do or do not
-# match the list that shipped beside them.
+# NOT "self-integrity", "tamper protection" or "installation is trusted": each of those
+# names promises attacker resistance this check cannot have, and titles are what people
+# actually read. What it honestly says is narrower and still useful.
 _TITLE = "Installed files match their manifest"
 
 
@@ -258,6 +223,17 @@ def verify() -> list[Check]:
     Non-critical by design - see the module docstring.
     """
     report = check_tree()
+
+    if report.manifest_unreadable:
+        return [Check(
+            "controller.integrity", _TITLE, Verdict.UNKNOWN, critical=False,
+            detail=("A file manifest is present beside this copy of bruhswer but "
+                    "could not be read, so its files were not compared against "
+                    "anything. That is damage to the manifest itself, not the normal "
+                    "no-manifest case - reinstall from a known-good copy."),
+            evidence=f"manifest_path={MANIFEST_PATH} present=True readable=False",
+            evidence_kind=EvidenceKind.LIVE,
+            unknown_reason=UnknownReason.UNREADABLE)]
 
     if not report.manifest_present:
         return [Check(

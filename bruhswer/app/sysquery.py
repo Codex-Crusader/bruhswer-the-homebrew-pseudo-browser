@@ -1,32 +1,28 @@
 """The ONLY place bruhswer runs an external program. Read-only queries.
 
-Why this module exists at all: some Windows state (firewall rules, network profile,
-Defender status) has no usable Python binding in the standard library, and adding a
-dependency for it would grow the trusted stack (brief SS49). So a small number of
-fixed, audited PowerShell queries are used instead.
+Some Windows state - firewall rules, network profile, Defender status - has no usable
+standard-library binding, and adding a dependency for it would grow the trusted stack.
+So a small number of fixed, audited PowerShell queries are used instead.
 
-The rules this module enforces, and they are not negotiable (brief SS15, SS48):
+The rules, and they are not negotiable:
 
-  - subprocess is ALWAYS given an explicit argument list. `shell=True` appears nowhere
-    in bruhswer.
+  - subprocess ALWAYS gets an explicit argument list. `shell=True` appears nowhere.
   - the executable is a fixed absolute path from config, never resolved via PATH.
-  - every script is a CONSTANT authored in bruhswer's own source. The only values ever
-    substituted are bruhswer's own literals from config.py -- never a URL, filename,
-    header, downloaded file, or anything else a webpage can influence.
+  - every script is a CONSTANT authored here. The only substituted values are
+    bruhswer's own literals from config.py, never anything a webpage can influence.
   - nothing here modifies system state. Changes go through the elevated one-shot in
-    tools/, with explicit consent and a rollback (brief SS70).
+    tools/, with explicit consent and a rollback.
 
-There is deliberately no generic `run(command)` function. A caller cannot ask this
-module to execute something arbitrary, because no such entry point is exposed.
+There is deliberately no generic `run(command)`, so no caller can ask this module to
+execute something arbitrary.
 
 EVERY QUERY RETURNS A `Probe`, not a bare list. The old accessors returned `[]` for
-"there are none", for "Windows refused" and for "PowerShell timed out" alike, so a
-caller could not tell a measurement that did not happen from one that did. The status
-now travels with the value, so an UNKNOWN verdict can say WHY.
+"there are none", "Windows refused" and "PowerShell timed out" alike, so a caller could
+not tell a measurement that did not happen from one that did.
 
 Each script body runs inside `_ENVELOPE`, which always writes one JSON object with
-`ok`/`err`/`data`. Without it, `ConvertTo-Json` on an empty array writes nothing at
-all - byte-identical to a script that died before producing output.
+`ok`/`err`/`data`. Without it, `ConvertTo-Json` on an empty array writes nothing at all
+- byte-identical to a script that died before producing output.
 """
 
 from __future__ import annotations
@@ -333,19 +329,14 @@ def dns_servers() -> Probe[list[dict[str, Any]]]:
 
 
 # --- elevation, measured once ---------------------------------------------------
-# A process cannot change its own elevation while it runs. Windows decides it at
-# CreateProcess time from the token the process is started with, and there is no API
-# that moves a running process between elevated and unelevated - becoming elevated
-# means starting a NEW process. So this is a property of the process lifetime, and
-# re-measuring it costs a ~250ms PowerShell round trip on every single verification
-# pass for an answer that provably cannot have changed.
+# Windows decides elevation at CreateProcess time and no API moves a running process
+# between elevated and unelevated, so this is a property of the process lifetime and
+# re-measuring costs ~250ms per pass for an answer that cannot have changed.
 #
-# ONLY A DEFINITE ANSWER IS CACHED, and this is the part that has to be right.
-# `controller.privilege` is critical=True, so under the fail-closed rule in verdict.py
-# an UNKNOWN there BLOCKS LAUNCH. Memoising a None - one PowerShell timeout under load
-# at startup - would therefore brick every launch for the rest of the process's life,
-# with no way to recover short of restarting bruhswer. A failed measurement is not a
-# fact about the world and is never cached; the next pass simply asks again.
+# ONLY A DEFINITE ANSWER IS CACHED. `controller.privilege` is critical=True, so an
+# UNKNOWN there blocks launch - memoising a None from one startup timeout would brick
+# every launch for the life of the process. A failed measurement is not a fact about
+# the world; the next pass simply asks again.
 _elevated_cache: Probe[bool | None] | None = None
 
 

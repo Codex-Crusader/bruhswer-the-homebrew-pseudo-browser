@@ -6,17 +6,14 @@ Per-user, no Administrator, and it uninstalls what it installs. Run it on a mach
 with no existing bruhswer install - it refuses to start if one is present, because
 uninstalling somebody's real installation to satisfy a checklist would be rude.
 
-WHY THIS EXISTS AS A SCRIPT
-    The 0.9.1 release shipped with eight unticked install boxes because the check was
-    manual and nobody had a machine free. The first automated attempt then PASSED its
-    "no tests/ in the install" assertions while looking at a directory the installer
-    never writes to - the application is nested one level down, under {app}\\bruhswer.
-    A check that passes because it is looking in the wrong place is worse than no check,
-    so the layout is asserted explicitly below.
+A script because the manual version left eight unticked boxes in 0.9.1, and the first
+automated attempt PASSED its "no tests/ in the install" assertions while looking at a
+directory the installer never writes to - the application is nested under
+{app}\\bruhswer. A check that passes because it looked in the wrong place is worse than
+no check, so the layout is asserted explicitly below.
 
-WHAT IT STILL DOES NOT PROVE
-    It runs on a machine that already has Python and Edge, so it cannot exercise the
-    prerequisite refusals. Those need a clean Windows image and are still unverified.
+It still does not prove the prerequisite refusals: it runs on a machine that already has
+Python and Edge. Those need a clean Windows image and are still unverified.
 """
 
 from __future__ import annotations
@@ -96,15 +93,15 @@ def _system_changes_present() -> bool:
 def _backup_user_data() -> Path | None:
     """Copy the user's bruhswer data aside before anything destructive runs.
 
-    THIS SCRIPT UNINSTALLS FOR REAL, AGAINST THE REAL %LOCALAPPDATA%\\BRUHWSER.
-    Redirecting the environment does not move it: Inno resolves {localappdata} from the
-    shell folder, not from the variable. So the only place a guard can live is here.
+    THIS SCRIPT UNINSTALLS FOR REAL, against the real %LOCALAPPDATA%\\BRUHWSER, and
+    redirecting the environment does not move it - Inno resolves {localappdata} from
+    the shell folder. So the only place a guard can live is here.
 
-    It is needed because the thing it guards against already happened. During 0.11.0's
-    verification the silent uninstall deleted a 110 MB persistent profile, the
-    quarantine and the logs, and the script reported that user data had been left alone.
-    The uninstaller no longer does that, but a tool that destroys real data when one
-    line of Pascal is wrong should not be relying on that line staying right.
+    Needed because it already happened: during 0.11.0's verification the silent
+    uninstall deleted a 110 MB persistent profile, the quarantine and the logs, and the
+    script reported user data had been left alone. The uninstaller no longer does that,
+    but a tool that destroys real data when one line of Pascal is wrong should not rely
+    on that line staying right.
 
     Returns the backup location, or None if there was nothing to copy.
     """
@@ -157,17 +154,11 @@ def main(setup: Path) -> int:
     check("uninstaller present",
           (APP / "uninstall").is_dir() or any(APP.glob("unins*.exe")))
 
-    # THE FILE MANIFEST. Asserted here because this is the only place that looks at a
-    # REAL install, and the failure it guards against is silent: if the .iss pattern
-    # ever stops shipping non-.py files under app\, or .gitignore swallows the
-    # manifest, then every installed copy reports "no manifest shipped" and the drift
-    # check does nothing - while passing its entire unit suite in the dev tree, where
-    # the manifest is always present.
-    #
-    # It is also checked for FRESHNESS, not just presence. Regenerating the manifest
-    # must be the LAST build step; a manifest generated before the final source edit
-    # ships a build that reports FAIL on a perfectly good install, which teaches the
-    # user to ignore the one indicator that would have told them something real.
+    # The only place that looks at a REAL install, and the failure is silent: if the
+    # .iss stops shipping non-.py files under app\, every installed copy reports "no
+    # manifest shipped" and the drift check does nothing, while the unit suite passes
+    # in the dev tree where the manifest is always present. Checked for FRESHNESS too -
+    # regenerating must be the LAST build step, or a good install reports FAIL.
     manifest = PKG / "app" / "security" / "MANIFEST.sha256"
     check("file manifest shipped", manifest.is_file(), str(manifest))
 
