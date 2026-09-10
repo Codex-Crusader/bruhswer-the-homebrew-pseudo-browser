@@ -108,6 +108,21 @@ gh attestation verify bruhswer-0.12.2-setup.exe \
   --repo Codex-Crusader/bruhswer-the-homebrew-pseudo-browser
 ```
 
+Verified against the published asset, which returns commit
+`5b4a6b4525f33f6786f6cde2ef1ebdc84769dc86` and `.github/workflows/ci.yml`.
+
+**The published installer is the one CI built, not a local build**, and that is what
+makes the command above work. CI attests the artifact *it* produces; Inno Setup embeds
+build-time state, so a locally built installer is a different binary and has no
+attestation. Publishing the local one - which is what happened first, for about five
+minutes, before it was caught and replaced at zero downloads - would have shipped a
+release whose own instructions returned 404. That is the defect 0.12.1 existed to fix,
+and it nearly repeated here.
+
+```
+SHA-256  9F7F521DD2E929FC343A54C390B2A50FE07E819817DC5EDE87AA212DF2A98276
+```
+
 The SHA-256 in `SHA256SUMS.txt` is published and still worth checking. Provenance
 answers a different question: not *"is this the file the author meant to publish"* but
 *"was this built by this repository's CI, from source anyone can read"*.

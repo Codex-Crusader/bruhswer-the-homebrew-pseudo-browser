@@ -107,10 +107,25 @@ this file.
 [x] Published asset downloaded and re-hashed after upload
 [x] Release notes written, including what changed and what is still not guaranteed
 [x] Signing status stated honestly (unsigned, and the notes say so)
-[ ] Provenance verified against the PUBLISHED asset
-      CI generates it on push; verify after the workflow completes.
+[x] Provenance verified against the PUBLISHED asset
+      9f7f521d... -> commit 5b4a6b4, .github/workflows/ci.yml, github-hosted runner
 [x] Tag pushed
 ```
+
+**The published asset had to be replaced once, and this is why.** The release first went
+out with the LOCALLY built installer (`F9501F96...`). CI attests the artifact *it*
+builds, and Inno Setup embeds build-time state, so the two binaries differ and
+`gh attestation verify` on the published file returned HTTP 404 - against release notes
+that told the reader to run exactly that command.
+
+This is the same defect 0.12.1 was cut to fix: documentation asserting a verification
+that does not hold for the artifact it names. It was caught by running the command
+rather than assuming it, at zero downloads and about five minutes after publishing, and
+the CI-built binary (`9F7F521D...`) replaced it along with `SHA256SUMS.txt`.
+
+**The rule for future releases: publish the CI artifact, not the local build.** The
+local build is still worth producing, because it proves the installer script compiles
+on the release machine, but it is not the thing to upload.
 
 ## After release
 

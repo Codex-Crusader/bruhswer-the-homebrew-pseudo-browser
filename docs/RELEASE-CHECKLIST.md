@@ -60,6 +60,11 @@ The one that matters most for this project.
 
 ```
 [ ] Installer builds                        ISCC.exe installer\bruhswer.iss
+[ ] PUBLISH THE CI ARTIFACT, NOT THE LOCAL BUILD
+      CI attests the installer IT builds. Inno embeds build-time state, so a local
+      build is a different binary with no attestation, and gh attestation verify
+      on it returns 404 - against notes telling the reader to run it. Cost 0.12.2
+      a re-upload; caught at zero downloads only because the command was run.
 [ ] Installer contents reviewed             (no tests, no .venv, no profiles, no logs)
 [ ] Clean install tested
 [ ] Launch from Start Menu shortcut tested
