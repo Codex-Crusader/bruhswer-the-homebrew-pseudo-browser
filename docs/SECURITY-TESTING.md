@@ -8,7 +8,7 @@ as unfixable. It tells you where the trust boundaries actually are, what has alr
 been tried, how to set up a test environment, and how to report what you find without
 either of us getting it wrong.
 
-**Please read [Already known](#already-known) before reporting.** Several of the most
+**Please read [Already known](#4-already-known) before reporting.** Several of the most
 obvious findings here are documented platform limitations, and re-reporting them costs
 you effort and tells us nothing new.
 
@@ -286,7 +286,7 @@ Optional. Happy to receive it, happy to disagree with it.
 ### Reports that will be declined, politely
 
 - Automated scanner output with no analysis, and no demonstration that it applies here.
-- Anything from the [Already known](#already-known) table, unless you show it is worse
+- Anything from the [Already known](#4-already-known) table, unless you show it is worse
   than documented.
 - Chromium, Edge or Windows vulnerabilities. Report those to Microsoft.
 - Anything requiring privileges the attacker would already have.
