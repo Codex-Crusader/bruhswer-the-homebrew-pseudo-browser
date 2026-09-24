@@ -120,8 +120,6 @@ to get wrong. A test parses the source and fails the build if that ever changes.
 
 ## What it can't do
 
-Read this part. It is the part most projects leave out.
-
 - **Localhost is reachable, and bruhswer cannot stop it.** Windows Firewall does not
   filter loopback. 19 different routes in were tested and every one got through. It is
   reported as `NOT ENFORCEABLE` everywhere you can see it.
