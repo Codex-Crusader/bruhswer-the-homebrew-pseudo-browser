@@ -27,7 +27,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.security.verifier import VerificationResult  # noqa: E402
+from app.security.verifier import VerificationResult, guard_failure_id  # noqa: E402
 from app.ui import verification_ui, verify_worker  # noqa: E402
 from app.verdict import Check, Verdict  # noqa: E402
 
@@ -98,6 +98,23 @@ class TestFindRegressions(unittest.TestCase):
         session is open. A vanished check is not a failed one."""
         before = _result(_check("downloads.quarantine", Verdict.PASS))
         after = _result(_check("net.rule.x", Verdict.PASS))
+        self.assertEqual(verify_worker.find_regressions(before, after), ())
+
+    def test_a_check_that_vanishes_because_its_guard_crashed_is_reported(self):
+        """The crash replaces the guard's checks with one UNKNOWN of its own, which is
+        new rather than PASS -> not-PASS, so nothing warned that browser.sandbox had
+        gone from verified to not measured at all."""
+        before = _result(_check("browser.sandbox", Verdict.PASS),
+                         _check("browser.cmdline", Verdict.PASS))
+        after = _result(_check("browser.cmdline", Verdict.PASS),
+                        _check(guard_failure_id("browser", "sandbox"), Verdict.UNKNOWN))
+        self.assertEqual(verify_worker.find_regressions(before, after),
+                         (("browser.sandbox", "title for browser.sandbox"),))
+
+    def test_a_crash_in_another_category_does_not_report_a_vanished_check(self):
+        """downloads.quarantine vanishing when a session closes is still not news."""
+        before = _result(_check("downloads.quarantine", Verdict.PASS))
+        after = _result(_check(guard_failure_id("dns", "dns"), Verdict.UNKNOWN))
         self.assertEqual(verify_worker.find_regressions(before, after), ())
 
     def test_multiple_regressions_are_all_reported(self):

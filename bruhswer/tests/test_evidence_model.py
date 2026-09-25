@@ -25,6 +25,7 @@ if str(_ROOT) not in sys.path:
 
 from app import config, sysquery  # noqa: E402
 from app.controller import controller as ctrl  # noqa: E402
+from app.security import verifier  # noqa: E402
 from app.verdict import (Check, EvidenceKind, UnknownReason,  # noqa: E402
                          Verdict, reason_for_probe)
 
@@ -81,9 +82,6 @@ EXPECTED: dict[str, EvidenceKind] = {
     "dns.encrypted": READ,
 }
 
-# Guards emit one of these if they raise; verifier.verify_all names them after the guard.
-_GUARD_FAILURE_SUFFIX = ".guard"
-
 
 def _live_result():
     return ctrl.Controller().verify()
@@ -104,8 +102,22 @@ class TestEveryCheckDeclaresItsEvidence(unittest.TestCase):
     def test_no_guard_crashed(self):
         """A crashed guard would hide the checks this suite is meant to inspect."""
         crashed = [c.check_id for c in self.result.checks
-                   if c.check_id.endswith(_GUARD_FAILURE_SUFFIX)]
+                   if verifier.guard_failure_category(c.check_id)]
         self.assertEqual(crashed, [], f"guards raised: {crashed}")
+
+    def test_every_guard_reports_under_its_declared_category(self):
+        """verify_all declares a category per guard, and a crash check is named in it,
+        so the status row that shows the guard's checks shows its crash too. That only
+        holds if every check the guard REALLY emits carries the same category. Checks
+        are appended in guard order, so the timings slice them back per guard."""
+        start = 0
+        for timing in self.result.timings:
+            produced = self.result.checks[start:start + timing.checks]
+            start += timing.checks
+            for check in produced:
+                with self.subTest(guard=timing.name, check_id=check.check_id):
+                    self.assertTrue(check.check_id.startswith(f"{timing.category}."))
+        self.assertEqual(start, len(self.result.checks))
 
     def test_every_check_id_is_in_the_table(self):
         unknown = sorted({c.check_id for c in self.result.checks} - set(EXPECTED))

@@ -17,7 +17,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-333?style=flat-square">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-3FB950?style=flat-square">
   <img alt="licence" src="https://img.shields.io/badge/licence-Apache--2.0-333?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-329%20passing-3FB950?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-351%20of%20352%20passing-3FB950?style=flat-square">
 </p>
 
 ---
@@ -223,7 +223,7 @@ what is about to go, so you can export it. It will not quietly bin your download
 | [Architecture](docs/ARCHITECTURE.md) | How it is built, as it actually ships |
 | [Security model](docs/SECURITY-MODEL.md) | Threat model, guarantees, non-guarantees, verdict semantics |
 | [Limitations](docs/LIMITATIONS.md) | Every measured boundary - the honest part |
-| [Testing](docs/TESTING.md) | What the 329 assertions prove, and what they missed |
+| [Testing](docs/TESTING.md) | What the 352 assertions prove, and what they missed |
 | [Security testing](docs/SECURITY-TESTING.md) | If you want to attack it: scope, safe harbour, what's already known |
 | [Network & privacy](docs/NETWORK-PRIVACY.md) · [Data inventory](docs/DATA-INVENTORY.md) | What leaves the machine, and what is stored where |
 | [Roadmap](docs/ROADMAP.md) | What is planned, and what is refused |
@@ -235,9 +235,11 @@ what is about to go, so you can export it. It will not quietly bin your download
 ## Status
 
 **v0.12.2 - research-grade beta, deliberately.** The controls it claims are measured and
-329 assertions across 17 suites pass against a real browser, a real firewall and a real
-network. What keeps it below 1.0 is not unfinished code, it is unfinished *evidence*:
-releases are unsigned, builds are not reproducible, and every measurement here was taken
+352 assertions across 17 suites run against a real browser, a real firewall and a real
+network. On the last full run 351 passed. The one failure was a router probe, because
+that network's gateway served no web page ([details](docs/TESTING.md)).
+What keeps it below 1.0 is not unfinished code, it is unfinished *evidence*: releases are
+unsigned, builds are not reproducible, and every measurement here was taken
 by the author with no third-party audit. The [roadmap](docs/ROADMAP.md) tracks each one.
 
 Treat it as a security research tool that happens to be usable daily.

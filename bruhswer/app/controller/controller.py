@@ -21,7 +21,7 @@ from ..logging_setup import get_logger
 from ..privacy import privacy_guard
 from ..security import browser_guard, verifier
 from ..sessions import session_manager
-from ..verdict import Verdict
+from ..verdict import Verdict, worst
 
 _log = get_logger("controller")
 
@@ -525,19 +525,31 @@ class Controller:
         return edge.build_command(self.edge_path, profile_dir, extra, url)
 
 
+# (label, check categories rolled into it, description), in display order. Every
+# category a guard reports under must appear here, or its checks, and its crash
+# check, reach no row: `edge.` was missing, so an unsigned browser left every row
+# green. test_overclaim_regressions.py holds every guard category to this table.
+# DOWNLOADS is shown only while a session has a download folder to check.
+STATUS_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("HOST", ("host",), "This PC's exposure to the network"),
+    ("BROWSER", ("edge", "browser"), "Signed runtime, profile isolation and sandbox"),
+    ("NETWORK", ("net",), "Where the browser may connect"),
+    ("DNS", ("dns",), "Whether name lookups are encrypted"),
+    ("PRIVACY", ("privacy",), "Tracking and data minimisation"),
+    ("DOWNLOADS", ("downloads",), "Where downloaded files land"),
+    ("CONTROLLER", ("controller",), "bruhswer's own privileges"),
+)
+_OPTIONAL_ROWS = frozenset({"DOWNLOADS"})
+
+
 def summarise(result: verifier.VerificationResult) -> list[tuple[str, Verdict, str]]:
     """Category rollup for the status panel (brief SS7)."""
-    rows = [
-        ("HOST", result.category("host."), "This PC's exposure to the network"),
-        ("BROWSER", result.category("browser."), "Profile isolation and sandbox"),
-        ("NETWORK", result.category("net."), "Where the browser may connect"),
-        ("DNS", result.category("dns."), "Whether name lookups are encrypted"),
-        ("PRIVACY", result.category("privacy."), "Tracking and data minimisation"),
-        ("CONTROLLER", result.category("controller."), "bruhswer's own privileges"),
-    ]
-    if result.by_prefix("downloads."):
-        rows.insert(5, ("DOWNLOADS", result.category("downloads."),
-                        "Where downloaded files land"))
+    rows = []
+    for label, categories, description in STATUS_ROWS:
+        checks = [c for category in categories for c in result.by_prefix(f"{category}.")]
+        if not checks and label in _OPTIONAL_ROWS:
+            continue
+        rows.append((label, worst(checks) if checks else Verdict.UNKNOWN, description))
     return rows
 
 
