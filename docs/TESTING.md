@@ -1,6 +1,8 @@
 # Testing
 
-**329 assertions across 17 suites, 0 failures.**
+**352 assertions across 17 suites.** On the last full run (2026-09-25) 351 passed. The one
+failure was the router probe in `test_network_regression.py`: the gateway of that network
+served nothing on port 80, and the probe failed the same way on the code before the change.
 
 Counts are read from the run output, never carried forward from a previous release -
 this number has drifted before when it was retyped from memory.
@@ -28,14 +30,14 @@ More usefully: what the tests actually establish, and what they deliberately do 
 
 | Suite | Assertions | Needs | What it establishes |
 |---|---|---|---|
-| `test_security.py` | 54 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity, one quarantine-folder-naming derivation |
+| `test_security.py` | 67 | nothing | AST scans for dangerous primitives, the no-local-listener proof, URL refusal, filename sanitisation, session destruction incl. junctions, config sanity, one quarantine-folder-naming derivation |
 | `test_urls_fuzz.py` | 13 | nothing | Address-bar normalisation properties: what is accepted, what is refused, and that nothing becomes a flag |
-| `test_overclaim_regressions.py` | 27 | nothing | The five indicators that lied - three in 0.9.2, one found by independent audit after 0.11.0 shipped, one where a Preferences file that parses but is not an object raised instead of reporting UNKNOWN - each pinned so it cannot come back |
-| `test_evidence_model.py` | 19 | nothing | Every check declares its evidence kind against a frozen table; every UNKNOWN carries a reason; probe statuses and reason codes stay in step |
+| `test_overclaim_regressions.py` | 34 | nothing | The six indicators that lied - three in 0.9.2, one found by independent audit after 0.11.0 shipped, one where a Preferences file that parses but is not an object raised instead of reporting UNKNOWN, and one where a guard that crashed let the browser launch and left its status row green - each pinned so it cannot come back |
+| `test_evidence_model.py` | 20 | nothing | Every check declares its evidence kind against a frozen table; every UNKNOWN carries a reason; probe statuses and reason codes stay in step |
 | `test_accessibility.py` | 16 | nothing | Verdicts are never carried by colour alone; the high-contrast and light palettes have their WCAG ratios **computed**, not asserted |
 | `test_window_surface.py` | 10 | nothing | The three-file split: every `self.X` resolves, no stub survives, the surface the UI suites drive is intact, neither mixin shadows the other |
 | `test_session_races.py` | 27 | nothing | Regression to recovery, close-session racing a live pass, panic at every lifecycle point, no stale UI crossing a session boundary, and the curtain painting before a blocking stop() call |
-| `test_reverification.py` | 21 | nothing | What counts as a control that stopped holding, the worker's threading contract, and the one-shot async verify behind startup() and the BRUH CHECK panel |
+| `test_reverification.py` | 23 | nothing | What counts as a control that stopped holding, the worker's threading contract, and the one-shot async verify behind startup() and the BRUH CHECK panel |
 | `test_disposable_overwrite.py` | 6 | nothing | The overwrite walker: what it covers, what it skips, and that skips are counted |
 | `test_integrity.py` | 18 | nothing | The file manifest: drift detection, that an unreadable file is UNKNOWN rather than a pass, and that a damaged manifest is not reported as an absent one |
 | `test_panic_and_account.py` | 17 | nothing | Process attribution by creation time, termination reporting, and the account-settings verb |

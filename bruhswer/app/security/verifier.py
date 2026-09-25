@@ -31,18 +31,38 @@ _log = get_logger("verifier")
 # A module-level tuple rather than a mutable [] default, so nothing can append to it.
 NO_RENDERERS: tuple[int, ...] = ()
 
+# The middle segment of a crashed guard's check_id: "<category>.guard.<guard name>".
+# Named under the CATEGORY its checks report in, so the status row that would have
+# shown those checks shows the crash instead of staying green without them.
+_GUARD_FAILURE_SEGMENT = "guard"
+
+
+def guard_failure_id(category: str, name: str) -> str:
+    return f"{category}.{_GUARD_FAILURE_SEGMENT}.{name}"
+
+
+def guard_failure_category(check_id: str) -> str | None:
+    """The category of a crashed guard's check, or None for any other check."""
+    parts = check_id.split(".")
+    if len(parts) == 3 and parts[1] == _GUARD_FAILURE_SEGMENT:
+        return parts[0]
+    return None
+
 
 @dataclass(frozen=True)
 class GuardTiming:
-    """How long one guard took, and how many checks it produced.
+    """How long one guard took, how many checks it produced, and their category.
 
     Collected into the result object rather than a module-level list, so it needs no
-    locking - the UI thread and the verify worker each build their own.
+    locking - the UI thread and the verify worker each build their own. `category` is
+    the check_id prefix every check from this guard carries; test_evidence_model.py
+    holds each guard to it on a live pass.
     """
 
     name: str
     duration_ms: float
     checks: int
+    category: str
 
 
 @dataclass
@@ -90,7 +110,7 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
     """
     result = VerificationResult()
 
-    def run(name: str, guard: Callable[[], list[Check]]) -> None:
+    def run(name: str, category: str, guard: Callable[[], list[Check]]) -> None:
         """Run one guard, record what it cost, and never let it take the pass down.
 
         A guard that raised used to abort the whole pass, costing the user every OTHER
@@ -111,7 +131,8 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
         except Exception as exc:                    # noqa: BLE001  # lint: allow broad-except - one guard must not take down the pass
             _log.exception("guard %s raised; the rest of the pass continues", name)
             produced = [Check(
-                f"{name}.guard", f"{name} checks could not run", Verdict.UNKNOWN,
+                guard_failure_id(category, name), f"{name} checks could not run",
+                Verdict.UNKNOWN,
                 critical=True,
                 detail=(f"bruhswer's {name} checks could not run, so nothing they "
                         f"cover was established this pass, and the browser will not "
@@ -121,25 +142,27 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
                 unknown_reason=UnknownReason.PROBE_ERROR)]
         elapsed = (time.perf_counter() - started) * 1000.0
         result.checks.extend(produced)
-        result.timings.append(GuardTiming(name, elapsed, len(produced)))
+        result.timings.append(GuardTiming(name, elapsed, len(produced), category))
 
-    run("edge", lambda: edge.verify_runtime(edge_path))
+    run("edge", "edge", lambda: edge.verify_runtime(edge_path))
     if edge_path is not None:
-        run("browser", lambda: browser_guard.verify(profile_dir, argv))
+        run("browser", "browser", lambda: browser_guard.verify(profile_dir, argv))
         # Measured, not assumed: what the renderer tokens actually are on THIS machine.
         #
         # Passed straight through, NOT as `renderer_pids or []`. That idiom collapsed
         # None ("could not ask Windows") into [] ("asked, and there are none"), which
         # is the distinction embed.renderer_pids_for_profile exists to preserve.
-        run("sandbox", lambda: browser_guard.verify_renderer_sandbox(renderer_pids))
-        run("network", lambda: network_guard.verify(edge_path))
-    run("host", host_guard.evaluate)
-    run("controller", _controller_checks)
-    run("integrity", integrity.verify)
-    run("privacy", lambda: _privacy_checks(profile_dir, mode))
+        run("sandbox", "browser",
+            lambda: browser_guard.verify_renderer_sandbox(renderer_pids))
+        run("network", "net", lambda: network_guard.verify(edge_path))
+    run("host", "host", host_guard.evaluate)
+    run("controller", "controller", _controller_checks)
+    run("integrity", "controller", integrity.verify)
+    run("privacy", "privacy", lambda: _privacy_checks(profile_dir, mode))
     if download_dir is not None:
-        run("downloads", lambda: _download_checks(profile_dir, download_dir))
-    run("dns", _dns_checks)
+        run("downloads", "downloads",
+            lambda: _download_checks(profile_dir, download_dir))
+    run("dns", "dns", _dns_checks)
 
     verdicts: dict[str, int] = {}
     for check in result.checks:

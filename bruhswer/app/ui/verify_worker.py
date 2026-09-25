@@ -89,11 +89,22 @@ def find_regressions(previous: verifier.VerificationResult | None,
         return ()
     before = _comparable(previous)
     after = _comparable(current)
-    titles = {c.check_id: c.title for c in current.checks}
-    return tuple(
-        (check_id, titles.get(check_id, check_id))
-        for check_id, verdict in after.items()
-        if before.get(check_id) is Verdict.PASS and verdict is not Verdict.PASS)
+    titles = {c.check_id: c.title for c in previous.checks}
+    titles.update((c.check_id, c.title) for c in current.checks)
+    changed = [check_id for check_id, verdict in after.items()
+               if before.get(check_id) is Verdict.PASS and verdict is not Verdict.PASS]
+
+    # A check that is simply ABSENT now is not reported in general: checks come and
+    # go with session state (downloads.* exists only while a session is open). But
+    # when a guard in that check's category CRASHED this pass, the absence is the
+    # crash, and staying quiet would let a PASS vanish with no warning at all.
+    crashed = {category for c in current.checks
+               if (category := verifier.guard_failure_category(c.check_id))}
+    vanished = [check_id for check_id, verdict in before.items()
+                if verdict is Verdict.PASS and check_id not in after
+                and check_id.split(".", 1)[0] in crashed]
+    return tuple((check_id, titles.get(check_id, check_id))
+                 for check_id in changed + vanished)
 
 
 class VerifyWorker:

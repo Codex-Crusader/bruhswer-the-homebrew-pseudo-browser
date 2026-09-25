@@ -28,7 +28,8 @@ would have passed before the fix documents nothing.
                        which has no handler.
   6. CrashedGuard      a guard that raised became one NON-critical UNKNOWN, and the
                        critical checks it would have produced were absent, so a crash
-                       in the edge, browser or network guard left may_launch True.
+                       in the edge, browser or network guard left may_launch True. Its
+                       check was also named outside every status row's category.
 """
 
 from __future__ import annotations
@@ -397,26 +398,28 @@ class TestIPv6IsNotClaimedAsMeasured(unittest.TestCase):
                          "an unmeasurable property must not block launch")
 
 
-# Every guard verify_all runs, and the attribute it looks up to run it. A guard that
-# verify_all gains without an entry here fails test_the_table_covers_every_guard.
-_GUARDS: dict[str, tuple[object, str]] = {
-    "edge": (verifier.edge, "verify_runtime"),
-    "browser": (browser_guard, "verify"),
-    "sandbox": (browser_guard, "verify_renderer_sandbox"),
-    "network": (network_guard, "verify"),
-    "host": (verifier.host_guard, "evaluate"),
-    "controller": (verifier, "_controller_checks"),
-    "integrity": (verifier.integrity, "verify"),
-    "privacy": (verifier, "_privacy_checks"),
-    "downloads": (verifier, "_download_checks"),
-    "dns": (verifier, "_dns_checks"),
+# Every guard verify_all runs, the attribute it looks up to run it, and the category
+# its checks report under. A guard that verify_all gains without an entry here fails
+# test_the_table_covers_every_guard, and a category that drifts from verify_all's
+# fails test_the_table_categories_match_verify_all.
+_GUARDS: dict[str, tuple[object, str, str]] = {
+    "edge": (verifier.edge, "verify_runtime", "edge"),
+    "browser": (browser_guard, "verify", "browser"),
+    "sandbox": (browser_guard, "verify_renderer_sandbox", "browser"),
+    "network": (network_guard, "verify", "net"),
+    "host": (verifier.host_guard, "evaluate", "host"),
+    "controller": (verifier, "_controller_checks", "controller"),
+    "integrity": (verifier.integrity, "verify", "controller"),
+    "privacy": (verifier, "_privacy_checks", "privacy"),
+    "downloads": (verifier, "_download_checks", "downloads"),
+    "dns": (verifier, "_dns_checks", "dns"),
 }
 
 
-def _passing(name: str):
-    """A stand-in guard that returns one critical PASS, whatever it is called with."""
+def _passing(name: str, category: str):
+    """A stand-in guard that returns one critical PASS in its category."""
     def guard(*_args, **_kwargs):
-        return [verifier.Check(f"{name}.stub", f"{name} stub", Verdict.PASS,
+        return [verifier.Check(f"{category}.stub-{name}", f"{name} stub", Verdict.PASS,
                                critical=True, detail="stub")]
     return guard
 
@@ -438,9 +441,10 @@ class TestCrashedGuardBlocksLaunch(unittest.TestCase):
     @staticmethod
     def _verify(crashing: str | None):
         with contextlib.ExitStack() as stack:
-            for name, (owner, attr) in _GUARDS.items():
+            for name, (owner, attr, category) in _GUARDS.items():
                 stack.enter_context(mock.patch.object(
-                    owner, attr, _raising if name == crashing else _passing(name)))
+                    owner, attr,
+                    _raising if name == crashing else _passing(name, category)))
             return verifier.verify_all(Path("profile"), [], "standard",
                                        Path("msedge.exe"), download_dir=Path("dl"))
 
@@ -449,9 +453,21 @@ class TestCrashedGuardBlocksLaunch(unittest.TestCase):
         self.assertEqual(ran, set(_GUARDS),
                          "verify_all runs a guard this test does not make crash")
 
+    def test_the_table_categories_match_verify_all(self):
+        ran = {t.name: t.category for t in self._verify(None).timings}
+        self.assertEqual(ran, {name: entry[2] for name, entry in _GUARDS.items()})
+
     def test_with_no_crash_the_stubs_allow_launch(self):
         """Without this, every assertion below could pass for an unrelated reason."""
         self.assertTrue(self._verify(None).may_launch)
+
+    def test_with_no_crash_every_row_is_green(self):
+        """The baseline for test_a_crash_turns_its_row_off_green."""
+        from app.controller import controller as ctrl
+
+        rows = {label: verdict for label, verdict, _desc
+                in ctrl.summarise(self._verify(None))}
+        self.assertEqual(set(rows.values()), {Verdict.PASS}, rows)
 
     def test_any_guard_that_raises_blocks_launch(self):
         for name in _GUARDS:
@@ -460,11 +476,36 @@ class TestCrashedGuardBlocksLaunch(unittest.TestCase):
                 self.assertFalse(result.may_launch,
                                  f"a crash in the {name} guard still allowed launch")
                 failed = [c for c in result.blockers
-                          if c.check_id == f"{name}.guard"]
+                          if verifier.guard_failure_category(c.check_id)]
                 self.assertEqual(len(failed), 1)
                 self.assertIs(failed[0].verdict, Verdict.UNKNOWN)
                 self.assertIsNot(failed[0].unknown_reason,
                                  verifier.UnknownReason.NONE)
+
+    def test_every_guard_category_reaches_a_status_row(self):
+        """A crashed sandbox guard was named `sandbox.guard`, under no row's prefix,
+        so the BROWSER row stayed green while launch was blocked. And `edge.` reached
+        no row at all, so an unsigned browser left every row green."""
+        from app.controller import controller as ctrl
+
+        covered = {category for _label, categories, _desc in ctrl.STATUS_ROWS
+                   for category in categories}
+        for timing in self._verify(None).timings:
+            with self.subTest(guard=timing.name):
+                self.assertIn(timing.category, covered)
+
+    def test_a_crash_turns_its_row_off_green(self):
+        from app.controller import controller as ctrl
+
+        row_for = {category: label for label, categories, _desc in ctrl.STATUS_ROWS
+                   for category in categories}
+        for name, (_owner, _attr, category) in _GUARDS.items():
+            with self.subTest(guard=name):
+                rows = {label: verdict for label, verdict, _desc
+                        in ctrl.summarise(self._verify(name))}
+                self.assertIsNot(rows[row_for[category]], Verdict.PASS,
+                                 f"a crash in the {name} guard left "
+                                 f"{row_for[category]} green")
 
 
 if __name__ == "__main__":

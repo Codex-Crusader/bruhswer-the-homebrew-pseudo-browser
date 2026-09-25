@@ -324,8 +324,9 @@ the rest. A security decision made anywhere else is a bug.
 | `downloads/quarantine.py` | Quarantine paths and export |
 | `config.py`, `verdict.py` | Constants, and the rule that UNKNOWN is not PASS |
 
-**3,255 lines of the application's 8,716.** The remaining 5,461 are UI, window hosting,
-orchestration and presentation. They can be wrong without a security property being
+**3,146 lines of the application's 8,399.** The remaining 5,253 are UI, window hosting,
+orchestration and presentation. Counted on 2026-09-25 with `wc -l` over every tracked
+`.py` file under `bruhswer/app/`. They can be wrong without a security property being
 wrong, which is the point of keeping the split visible.
 
 Not in the TCB, and deliberately so: everything under `ui/` (it renders verdicts, it
