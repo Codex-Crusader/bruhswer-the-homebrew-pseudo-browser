@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +70,9 @@ class GuardTiming:
 class VerificationResult:
     checks: list[Check] = field(default_factory=list)
     timings: list[GuardTiming] = field(default_factory=list)
+    # Measured elapsed time of the pass. Guards overlap, so this is NOT the sum of
+    # their durations.
+    wall_ms: float = 0.0
 
     @property
     def blockers(self) -> list[Check]:
@@ -85,12 +89,35 @@ class VerificationResult:
         subset = self.by_prefix(prefix)
         return worst(subset) if subset else Verdict.UNKNOWN
 
-    @property
-    def total_ms(self) -> float:
-        return sum(t.duration_ms for t in self.timings)
-
     def slowest(self, limit: int = 3) -> list[GuardTiming]:
         return sorted(self.timings, key=lambda t: t.duration_ms, reverse=True)[:limit]
+
+
+def _run_guard(name: str, category: str,
+               guard: Callable[[], list[Check]]) -> tuple[list[Check], GuardTiming]:
+    """Run one guard. Never raises.
+
+    A crash becomes one CRITICAL UNKNOWN. The guard's own checks are absent, and
+    blocks_launch() cannot see an absent check, so a non-critical stand-in let a
+    crash in a critical guard leave may_launch True.
+    """
+    started = time.perf_counter()
+    try:
+        produced = guard()
+    except Exception as exc:                    # noqa: BLE001  # lint: allow broad-except - one guard must not take down the pass
+        _log.exception("guard %s raised; the rest of the pass continues", name)
+        produced = [Check(
+            guard_failure_id(category, name), f"{name} checks could not run",
+            Verdict.UNKNOWN,
+            critical=True,
+            detail=(f"bruhswer's {name} checks could not run, so nothing they "
+                    f"cover was established this pass, and the browser will not "
+                    f"launch until they do."),
+            evidence=f"{exc.__class__.__name__}",
+            evidence_kind=EvidenceKind.INFERENCE,
+            unknown_reason=UnknownReason.PROBE_ERROR)]
+    elapsed = (time.perf_counter() - started) * 1000.0
+    return produced, GuardTiming(name, elapsed, len(produced), category)
 
 
 def verify_all(profile_dir: Path, argv: list[str], mode: str,
@@ -98,77 +125,54 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
                download_dir: Path | None = None,
                renderer_pids: Sequence[int] | None = NO_RENDERERS
                ) -> VerificationResult:
-    """`renderer_pids` has THREE meaningful values, not two:
+    """`renderer_pids`: [] means asked and found none, None means the query failed.
 
-        []      asked Windows, found no renderer processes
-        [...]   these are the renderers; measure their tokens
-        None    the query FAILED, so nothing is known either way
+    The default [] is right for the pre-launch call in Controller.start(), where no
+    session exists yet.
 
-    The default is the empty list, meaning "no session, nothing to measure" - which is
-    the right answer for the pre-launch call in Controller.start(). None is reserved
-    for a genuine measurement failure and must be passed explicitly.
+    The guards are independent and read-only, and almost all their time is spent
+    waiting on PowerShell, so they run at once: a pass costs its slowest guard, not
+    the sum (measured 5.0 s serial). Results are collected in SUBMISSION order, so
+    the check order, and slicing checks by `timings`, never depend on thread timing.
     """
-    result = VerificationResult()
-
-    def run(name: str, category: str, guard: Callable[[], list[Check]]) -> None:
-        """Run one guard, record what it cost, and never let it take the pass down.
-
-        A guard that raised used to abort the whole pass, costing the user every OTHER
-        light including the critical ones. A crash now costs exactly its own checks and
-        surfaces as an UNKNOWN naming the guard.
-
-        That UNKNOWN is CRITICAL, for every guard. The checks the guard would have
-        produced are absent, not failed, and blocks_launch() cannot see an absent
-        check - so a non-critical stand-in let a crash in the edge, browser or network
-        guard remove its critical checks and leave may_launch True. Which guards emit
-        critical checks is deliberately not consulted: that would be a second table to
-        keep in step by hand, and a crash is a bruhswer bug, where failing closed is
-        the right cost.
-        """
-        started = time.perf_counter()
-        try:
-            produced = guard()
-        except Exception as exc:                    # noqa: BLE001  # lint: allow broad-except - one guard must not take down the pass
-            _log.exception("guard %s raised; the rest of the pass continues", name)
-            produced = [Check(
-                guard_failure_id(category, name), f"{name} checks could not run",
-                Verdict.UNKNOWN,
-                critical=True,
-                detail=(f"bruhswer's {name} checks could not run, so nothing they "
-                        f"cover was established this pass, and the browser will not "
-                        f"launch until they do."),
-                evidence=f"{exc.__class__.__name__}",
-                evidence_kind=EvidenceKind.INFERENCE,
-                unknown_reason=UnknownReason.PROBE_ERROR)]
-        elapsed = (time.perf_counter() - started) * 1000.0
-        result.checks.extend(produced)
-        result.timings.append(GuardTiming(name, elapsed, len(produced), category))
-
-    run("edge", "edge", lambda: edge.verify_runtime(edge_path))
+    guards: list[tuple[str, str, Callable[[], list[Check]]]] = [
+        ("edge", "edge", lambda: edge.verify_runtime(edge_path))]
     if edge_path is not None:
-        run("browser", "browser", lambda: browser_guard.verify(profile_dir, argv))
-        # Measured, not assumed: what the renderer tokens actually are on THIS machine.
-        #
-        # Passed straight through, NOT as `renderer_pids or []`. That idiom collapsed
-        # None ("could not ask Windows") into [] ("asked, and there are none"), which
-        # is the distinction embed.renderer_pids_for_profile exists to preserve.
-        run("sandbox", "browser",
-            lambda: browser_guard.verify_renderer_sandbox(renderer_pids))
-        run("network", "net", lambda: network_guard.verify(edge_path))
-    run("host", "host", host_guard.evaluate)
-    run("controller", "controller", _controller_checks)
-    run("integrity", "controller", integrity.verify)
-    run("privacy", "privacy", lambda: _privacy_checks(profile_dir, mode))
+        guards += [
+            ("browser", "browser", lambda: browser_guard.verify(profile_dir, argv)),
+            # Not `renderer_pids or []`: that collapsed None ("could not ask") into
+            # [] ("asked, and there are none").
+            ("sandbox", "browser",
+             lambda: browser_guard.verify_renderer_sandbox(renderer_pids)),
+            ("network", "net", lambda: network_guard.verify(edge_path)),
+        ]
+    guards += [
+        ("host", "host", lambda: host_guard.evaluate()),
+        ("controller", "controller", lambda: _controller_checks()),
+        ("integrity", "controller", lambda: integrity.verify()),
+        ("privacy", "privacy", lambda: _privacy_checks(profile_dir, mode)),
+    ]
     if download_dir is not None:
-        run("downloads", "downloads",
-            lambda: _download_checks(profile_dir, download_dir))
-    run("dns", "dns", _dns_checks)
+        guards.append(("downloads", "downloads",
+                       lambda: _download_checks(profile_dir, download_dir)))
+    guards.append(("dns", "dns", lambda: _dns_checks()))
+
+    result = VerificationResult()
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=len(guards),
+                            thread_name_prefix="bruhswer-guard") as pool:
+        futures = [pool.submit(_run_guard, *guard) for guard in guards]
+        for future in futures:
+            produced, timing = future.result()
+            result.checks.extend(produced)
+            result.timings.append(timing)
+    result.wall_ms = (time.perf_counter() - started) * 1000.0
 
     verdicts: dict[str, int] = {}
     for check in result.checks:
         verdicts[str(check.verdict)] = verdicts.get(str(check.verdict), 0) + 1
     _log.info("verification complete: %s blockers=%d in %.0fms (slowest: %s)",
-              verdicts, len(result.blockers), result.total_ms,
+              verdicts, len(result.blockers), result.wall_ms,
               ", ".join(f"{t.name}={t.duration_ms:.0f}ms" for t in result.slowest()))
     return result
 

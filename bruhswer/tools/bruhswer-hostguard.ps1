@@ -52,6 +52,10 @@ $StateDir     = Join-Path $env:LOCALAPPDATA 'BRUHWSER\state'
 $StateFile    = Join-Path $StateDir 'hostguard-rollback.json'
 $ResultLog    = Join-Path $StateDir 'hostguard-results.log'
 $SharingGroup = 'File and Printer Sharing'
+# Matched by the Group resource string, not the display name: DisplayGroup is
+# translated, so on a non-English Windows the name matched no rules and this script
+# reported sharing as already off. -28502 was read back from FirewallAPI.dll.
+$SharingGroupId = '@FirewallAPI.dll,-28502'
 
 function Write-Head($t) {
   Write-Host ''
@@ -67,7 +71,7 @@ function Test-Admin {
 }
 
 function Get-PublicSharingRules {
-  Get-NetFirewallRule -DisplayGroup $SharingGroup -ErrorAction SilentlyContinue |
+  Get-NetFirewallRule -Group $SharingGroupId -ErrorAction SilentlyContinue |
     Where-Object { $_.Profile -match 'Public' -or $_.Profile -eq 'Any' }
 }
 

@@ -155,7 +155,7 @@ class TestEveryCheckDeclaresItsEvidence(unittest.TestCase):
 
     def test_the_pass_recorded_per_guard_timing(self):
         self.assertTrue(self.result.timings, "no guard timings were recorded")
-        self.assertGreater(self.result.total_ms, 0.0)
+        self.assertGreater(self.result.wall_ms, 0.0)
         for timing in self.result.timings:
             with self.subTest(guard=timing.name):
                 self.assertGreaterEqual(timing.duration_ms, 0.0)

@@ -173,16 +173,26 @@ def evaluate() -> list[Check]:
             name = str(group.get("Group", "?"))
             enabled = int(group.get("Enabled") or 0)
             total = int(group.get("Total") or 0)
+            in_group = int(group.get("InGroup") or 0)
             key = _SHARING_KEYS.get(name, name.lower().replace(" ", "-"))
             exposed = enabled > 0
+            if exposed:
+                detail = (f"{enabled} of {total} rules are enabled for the Public "
+                          f"profile. Other devices on this network may reach this PC.")
+            elif in_group == 0:
+                detail = (f"This PC has no {name} firewall rules, so none can be "
+                          f"enabled for the Public profile.")
+            elif total == 0:
+                detail = (f"None of this group's {in_group} rules apply to the Public "
+                          f"profile.")
+            else:
+                detail = "No rules in this group are enabled for the Public profile."
             checks.append(Check(
                 f"host.sharing.{key}", name,
                 Verdict.FAIL if exposed else Verdict.PASS, critical=False,
-                detail=(f"{enabled} of {total} rules are enabled for the Public "
-                        f"profile. Other devices on this network may reach this PC."
-                        if exposed else
-                        "No rules in this group are enabled for the Public profile."),
-                evidence=f"enabled={enabled}/{total} {sharing.reason()}",
+                detail=detail,
+                evidence=f"enabled={enabled}/{total} in_group={in_group} "
+                         f"{sharing.reason()}",
                 evidence_kind=EvidenceKind.READ_BACK))
 
     # --- SMB --------------------------------------------------------------------

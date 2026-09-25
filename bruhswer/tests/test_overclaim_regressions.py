@@ -30,13 +30,20 @@ would have passed before the fix documents nothing.
                        critical checks it would have produced were absent, so a crash
                        in the edge, browser or network guard left may_launch True. Its
                        check was also named outside every status row's category.
+  7. SharingGroups     sharing groups were matched by English display name, so on a
+                       non-English Windows every group read "0 of 0 enabled" - PASS.
+
+TestGuardsRunConcurrently is not an overclaim. It lives here because this suite runs
+in CI and already holds the guard table the test needs.
 """
 
 from __future__ import annotations
 
 import contextlib
+import re
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -506,6 +513,125 @@ class TestCrashedGuardBlocksLaunch(unittest.TestCase):
                 self.assertIsNot(rows[row_for[category]], Verdict.PASS,
                                  f"a crash in the {name} guard left "
                                  f"{row_for[category]} green")
+
+
+
+class TestGuardsRunConcurrently(unittest.TestCase):
+    """The pass took the SUM of its guards (5.0 s measured); it should take the slowest.
+
+    Deterministic, not timed: a Barrier only opens when every guard is running at
+    once, so a serial pass breaks it and every guard reports a crash.
+    """
+
+    _WAIT_SECONDS = 10
+
+    @staticmethod
+    def _verify_with(make_guard):
+        with contextlib.ExitStack() as stack:
+            for index, (name, (owner, attr, category)) in enumerate(_GUARDS.items()):
+                stack.enter_context(mock.patch.object(
+                    owner, attr, make_guard(index, name, category)))
+            return verifier.verify_all(Path("profile"), [], "standard",
+                                       Path("msedge.exe"), download_dir=Path("dl"))
+
+    def test_every_guard_is_running_at_the_same_time(self):
+        barrier = threading.Barrier(len(_GUARDS), timeout=self._WAIT_SECONDS)
+
+        def make_guard(_index, name, category):
+            passing = _passing(name, category)
+
+            def guard(*args, **kwargs):
+                barrier.wait()
+                return passing(*args, **kwargs)
+            return guard
+
+        result = self._verify_with(make_guard)
+        crashed = [c.check_id for c in result.checks
+                   if verifier.guard_failure_category(c.check_id)]
+        self.assertEqual(crashed, [], "guards did not all run at once")
+
+    def test_check_order_is_submission_order_even_when_finishing_in_reverse(self):
+        done = [threading.Event() for _ in _GUARDS]
+
+        def make_guard(index, name, category):
+            passing = _passing(name, category)
+
+            def guard(*args, **kwargs):
+                if index + 1 < len(done) and not done[index + 1].wait(
+                        self._WAIT_SECONDS):
+                    raise RuntimeError("the later guard never finished")
+                produced = passing(*args, **kwargs)
+                done[index].set()
+                return produced
+            return guard
+
+        result = self._verify_with(make_guard)
+        self.assertEqual([t.name for t in result.timings], list(_GUARDS))
+        self.assertEqual([c.check_id for c in result.checks],
+                         [f"{category}.stub-{name}"
+                          for name, (_o, _a, category) in _GUARDS.items()])
+
+    def test_wall_time_is_measured_not_summed(self):
+        result = self._verify_with(lambda _i, name, category: _passing(name, category))
+        self.assertGreater(result.wall_ms, 0.0)
+        self.assertFalse(hasattr(result, "total_ms"),
+                         "a summed duration would misreport an overlapping pass")
+
+
+class TestSharingGroupsAreMatchedByResourceId(unittest.TestCase):
+    """Defect 7. Sharing groups were matched by their English display names.
+
+    DisplayGroup is translated, so on a non-English Windows no rule matched and every
+    group read "0 of 0 enabled", which rendered PASS.
+    """
+
+    QUERY = sysquery._Q_SHARING_GROUPS  # lint: allow protected-access
+
+    def test_the_query_does_not_match_on_display_names(self):
+        self.assertNotIn("DisplayGroup", self.QUERY)
+        ids = re.findall(r"@FirewallAPI\.dll,-(\d+)", self.QUERY)
+        self.assertEqual(len(ids), 3)
+
+    @unittest.skipUnless(sys.platform == "win32", "reads FirewallAPI.dll")
+    def test_every_group_id_exists_in_firewallapi(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32 = ctypes.WinDLL("user32")
+        kernel32.LoadLibraryExW.restype = wintypes.HMODULE
+        kernel32.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE,
+                                            wintypes.DWORD]
+        user32.LoadStringW.argtypes = [wintypes.HINSTANCE, wintypes.UINT,
+                                       wintypes.LPWSTR, ctypes.c_int]
+        as_data_file = 0x2
+        module = kernel32.LoadLibraryExW(
+            str(config.SYSTEM32 / "FirewallAPI.dll"), None, as_data_file)
+        self.assertTrue(module, "FirewallAPI.dll could not be loaded")
+        buffer = ctypes.create_unicode_buffer(256)
+        for resource_id in re.findall(r"-(\d+)'", self.QUERY):
+            with self.subTest(resource_id=resource_id):
+                self.assertGreater(
+                    user32.LoadStringW(module, int(resource_id), buffer, len(buffer)), 0)
+
+    def test_a_group_with_no_rules_is_not_described_as_checked_rules(self):
+        from app.host import host_guard
+
+        probes = {name: _probe([]) for name in
+                  ("profiles", "firewall", "remote", "listeners")}
+        probes["smb"] = _probe(None)
+        probes["defender"] = _probe(None)
+        probes["sharing"] = _probe([
+            {"Group": "Remote Desktop", "InGroup": 0, "Total": 0, "Enabled": 0},
+            {"Group": "File and Printer Sharing", "InGroup": 32, "Total": 0,
+             "Enabled": 0},
+        ])
+        with mock.patch.object(host_guard, "_gather", lambda: probes):
+            checks = {c.check_id: c for c in host_guard.evaluate()}
+        self.assertIn("no Remote Desktop firewall rules",
+                      checks["host.sharing.remote-desktop"].detail)
+        self.assertIn("None of this group's 32 rules apply to the Public",
+                      checks["host.sharing.file-and-printer-sharing"].detail)
 
 
 if __name__ == "__main__":

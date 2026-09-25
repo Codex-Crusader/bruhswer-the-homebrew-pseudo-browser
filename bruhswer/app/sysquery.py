@@ -225,12 +225,28 @@ _Q_FIREWALL_PROFILES = (
 
 # SilentlyContinue KEPT: a display group that is not present on this machine is a real
 # answer, reported as Total=0, not a failed measurement.
+# ONE walk of the rule table, not one per group. Each Get-NetFirewallRule call scans all
+# rules (702 here), so three calls cost 3N: measured 2,023 ms cold, against 1,224 ms
+# for a single call naming all three groups.
+#
+# Matched on the Group RESOURCE string, never on DisplayGroup. DisplayGroup is
+# translated, so on a non-English Windows the English names matched no rules at all and
+# every group read "0 of 0 enabled" - PASS, having looked at nothing. The three IDs
+# were read back from FirewallAPI.dll with LoadString, not remembered.
+#
+# InGroup counts every rule in the group, before the Public filter, so "this PC has no
+# such rules" and "none of them apply to Public" are reported as different facts.
 _Q_SHARING_GROUPS = (
-    "foreach ($g in @('File and Printer Sharing','Network Discovery',"
-    "'Remote Desktop')) { $r = Get-NetFirewallRule -DisplayGroup $g "
-    "-ErrorAction SilentlyContinue | Where-Object { $_.Profile -match 'Public' "
-    "-or $_.Profile -eq 'Any' }; [pscustomobject]@{ Group=$g; "
-    "Total=@($r).Count; Enabled=@($r | Where-Object { $_.Enabled -eq 'True' }).Count } }"
+    "$groups = [ordered]@{ 'File and Printer Sharing'='@FirewallAPI.dll,-28502'; "
+    "'Network Discovery'='@FirewallAPI.dll,-32752'; "
+    "'Remote Desktop'='@FirewallAPI.dll,-28752' }; "
+    "$all = @(Get-NetFirewallRule -Group @($groups.Values) "
+    "-ErrorAction SilentlyContinue); "
+    "foreach ($g in $groups.Keys) { "
+    "$in = @($all | Where-Object { $_.Group -eq $groups[$g] }); "
+    "$r = @($in | Where-Object { $_.Profile -match 'Public' -or $_.Profile -eq 'Any' }); "
+    "[pscustomobject]@{ Group=$g; InGroup=$in.Count; Total=$r.Count; "
+    "Enabled=@($r | Where-Object { $_.Enabled -eq 'True' }).Count } }"
 )
 
 # SilentlyContinue KEPT: Get-NetTCPConnection throws when no connection matches the
