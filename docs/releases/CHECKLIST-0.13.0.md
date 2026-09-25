@@ -18,8 +18,8 @@
 [x] No suite reported SKIPPED                network policy applied; 2 rules present
 [x] Assertion count recorded here: 358       (read from the run output)
 [x] Real-world GUI walkthrough passes        37 OK, 0 problems
-[ ] CI green on the release commit            - checked after the merge, see Notes
-[ ] CodeQL green, no open alerts              - same
+[x] CI green on the release commit            ddbee1b: every job, Python 3.11/3.12/3.13
+[x] CodeQL green, no open alerts              ddbee1b: success, 0 open alerts
 ```
 
 **The one failing assertion is this network, not bruhswer.** "An UNRELATED program still
@@ -114,22 +114,27 @@ strength of an earlier release.
 ## Artifacts
 
 ```
-[ ] SHA-256 generated from the FINAL binary, after the last rebuild
-[ ] Checksum matches in SHA256SUMS.txt and the release body
-[ ] Published asset downloaded and re-hashed after upload
+[x] SHA-256 generated from the FINAL binary, the CI build of ddbee1b
+      D40C2F478C9E0DD87E472ABCEEC8BC154C9BA2C166CBD44B7A70B2FE2E9F4ACC
+[x] Checksum matches in SHA256SUMS.txt and the release body
+[x] Published asset downloaded and re-hashed after upload   same hash
 [x] Release notes written, including what changed and what is still not guaranteed
 [x] Signing status stated honestly (unsigned, and the notes say so)
-[ ] Provenance verified against the PUBLISHED asset
-[ ] Tag pushed
+[x] Provenance verified against the PUBLISHED asset
+      -> commit ddbee1b0b1424e1c5e1e8a91613070b4d75f12dc, .github/workflows/ci.yml
+         on main, github-hosted runner
+[x] Tag pushed                               v0.13.0 -> ddbee1b
 ```
 
-The artifact boxes are filled in on the release page and the notes of the commit that
-follows, because the CI installer only exists after this commit is merged.
+The checksum is recorded here and on the release page, not in the release notes, which
+ship inside the installer. The published installer is the CI artifact; the local build
+only proved the script compiles on the release machine.
 
 ## After release
 
 ```
-[ ] Release page renders correctly
+[ ] Release page renders correctly           - read back with gh release view; not
+                                               viewed in a browser
 [ ] Install from the published artifact, not the local build   - see packaging note
 [x] ROADMAP updated
 [x] Known issues carried forward into LIMITATIONS.md
