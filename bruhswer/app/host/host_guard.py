@@ -1,18 +1,8 @@
-"""HostGuard - protects this PC from other devices on the same network.
+"""HostGuard: what can other devices on this network reach on this PC?
 
-The rest of the app asks "what can a website reach?"; this asks "what can the laptop at
-the next table reach?", and is useful even when the browser is not running.
-
-It DETECTS and EXPLAINS, and never silently changes host configuration. This machine was
-found on university Wi-Fi with File and Printer Sharing enabled on the Public profile
-and SMB signing off; the right response is to tell the user and offer a narrow,
-reversible fix they approve.
-
-Every check is a READ_BACK except `host.listeners` and `host.remoteadmin`, which
-enumerate what is open right now. HostGuard asks Windows what its settings are and never
-sends a packet at this PC from another machine: "File and Printer Sharing is disabled
-for Public" is a configuration fact, "no device on this Wi-Fi can reach this PC" is a
-claim bruhswer has never tested.
+Detects and explains; never changes the host. Fixes are offered, narrow and reversible.
+Checks read Windows settings (READ_BACK), except listeners and remote admin (LIVE). No
+packet is ever sent at this PC, so reachability itself is never claimed.
 """
 
 from __future__ import annotations
@@ -27,14 +17,8 @@ _log = get_logger("host")
 
 
 def _gather() -> dict:
-    """Run this module's seven queries at once and return them by name.
-
-    Measured: HostGuard was 5213ms of a 9398ms pass, entirely spent waiting on
-    PowerShell, and the queries are read-only and independent.
-
-    Only the WAITING overlaps. Each probe still runs its own fixed script and keeps its
-    own status - a batched god-script would have turned seven reason codes into one.
-    """
+    """Run the seven independent queries at once. Each keeps its own script and status;
+    one batched script would merge seven reason codes into one."""
     queries = {
         "profiles": sysquery.network_profiles,
         "firewall": sysquery.firewall_profiles,
@@ -50,15 +34,11 @@ def _gather() -> dict:
         return {name: future.result() for name, future in futures.items()}
 
 
-# Wildcard-bound ports that are normal on any Windows machine. Flagging these would
-# train the user to ignore the warning, which is worse than not warning at all.
+# Wildcard-bound ports that are normal on any Windows machine.
 _EXPECTED_WILDCARD_PORTS = {135, 445, 5040, 7680, 49664, 49665, 49666, 49667,
                             49668, 49669, 49670, 49671, 49672, 49673, 49674}
 
-# The sharing groups queried, as (check_id suffix, display name). Named here so a
-# failed query can emit the SAME check_ids the success path does: find_regressions only
-# iterates the checks it can see, so an id that disappears is a PASS that silently
-# vanishes from the lights rather than one that regresses.
+# (check_id suffix, name). Fixed here so a failed query emits the same check_ids.
 _SHARING_GROUPS = (
     ("file-and-printer-sharing", "File and Printer Sharing"),
     ("network-discovery", "Network Discovery"),
@@ -69,13 +49,7 @@ _SHARING_KEYS = {name: key for key, name in _SHARING_GROUPS}
 
 def _unmeasured(check_id: str, title: str, what: str, probe,
                 critical: bool = False) -> Check:
-    """One UNKNOWN check for a query that did not come back.
-
-    Every failure here used to render as a bare "Could not read X", which reads like a
-    glitch whether the cause was a timeout under load, a Windows edition with no such
-    cmdlet, or an access denial that will never resolve. Those are three different next
-    actions for the user.
-    """
+    """One UNKNOWN check for a failed query, naming why it failed."""
     reason = reason_for_probe(probe.status)
     advice = {
         UnknownReason.TIMEOUT:
@@ -109,7 +83,6 @@ def evaluate() -> list[Check]:
         active = [p for p in profiles.value
                   if p.get("IPv4Connectivity") == "Internet"] or profiles.value
         if not active:
-            # Query succeeded; there is genuinely no network. Not a failed measurement.
             checks.append(Check(
                 "host.network", "Network category", Verdict.UNKNOWN, critical=False,
                 detail="Windows reports no connected network, so there is no network "
@@ -130,8 +103,7 @@ def evaluate() -> list[Check]:
                            else " On an untrusted network, Public is safer.")),
                 evidence=f"category={category} {profiles.reason()}",
                 evidence_kind=EvidenceKind.READ_BACK,
-                # The category read fine. What is unknown on a non-Public network is
-                # whether this network is trustworthy, which nobody has measured.
+                # Unknown: whether this non-Public network is trustworthy.
                 unknown_reason=(UnknownReason.NONE if on_public
                                 else UnknownReason.NEVER_MEASURED)))
 
@@ -233,10 +205,8 @@ def evaluate() -> list[Check]:
     else:
         running = [str(s.get("Name")) for s in remote.value
                    if str(s.get("Status")) == "Running"]
-        # SSDP and function discovery are chatty on a LAN but are not remote admin.
         admin_running = [n for n in running if n in ("TermService", "WinRM",
                                                     "RemoteRegistry")]
-        # LIVE: Status is what the service is doing; StartType would be the readback.
         checks.append(Check(
             "host.remoteadmin", "Remote administration",
             Verdict.PASS if not admin_running else Verdict.FAIL, critical=False,
@@ -256,8 +226,7 @@ def evaluate() -> list[Check]:
                         "depends on firewall rules bruhswer checks separately."),
                 evidence=f"discovery={discovery} {remote.reason()}",
                 evidence_kind=EvidenceKind.LIVE,
-                # The services ARE running - that part is measured. What is unknown is
-                # their reachability, and nobody has measured that from another host.
+                # Running is measured; reachability from another host is not.
                 unknown_reason=UnknownReason.NEVER_MEASURED))
 
     # --- unexpected listeners ---------------------------------------------------
@@ -267,7 +236,6 @@ def evaluate() -> list[Check]:
                                   "Which sockets are listening on all interfaces",
                                   listeners))
     else:
-        # An empty list is now a real finding: the envelope proves the query ran.
         ports = sorted({int(item.get("LocalPort", 0)) for item in listeners.value})
         unexpected = [p for p in ports if p not in _EXPECTED_WILDCARD_PORTS]
         checks.append(Check(
@@ -280,7 +248,7 @@ def evaluate() -> list[Check]:
             evidence=f"wildcard_ports={ports} {listeners.reason()}",
             evidence_kind=EvidenceKind.LIVE))
 
-    # --- Defender (never changed by bruhswer, only observed) --------------------
+    # --- Defender ---------------------------------------------------------------
     dfn = probes["defender"]
     if not dfn.ok or dfn.value is None:
         checks.append(_unmeasured("host.defender", "Microsoft Defender",
@@ -306,12 +274,8 @@ def evaluate() -> list[Check]:
 
 
 def remediations(checks: list[Check]) -> list[dict]:
-    """Narrow, reversible fixes for what was actually found. Nothing is applied here.
-
-    Each entry names the exact change so the user can read it before agreeing, and
-    every one is scoped to the Public profile or a single setting -- never a blanket
-    "harden everything" (brief SS42).
-    """
+    """Narrow, reversible fixes for what was found, each naming its exact change.
+    Nothing is applied here."""
     found = {c.check_id: c for c in checks}
     out: list[dict] = []
 

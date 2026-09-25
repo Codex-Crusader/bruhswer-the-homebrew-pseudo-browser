@@ -1,7 +1,4 @@
-"""A small AST linter for bruhswer, using only the standard library.
-
-`ast` covers the mechanical findings well enough that adding a package would be a real
-cost for a small gain.
+"""A small standard-library AST linter. Report only.
 
 Finds, per file:
     unused imports
@@ -10,8 +7,6 @@ Finds, per file:
     access to another module's protected members
     methods that never touch `self` (candidates for @staticmethod)
     calls whose return value is used but which always return None
-
-Report only. It changes nothing.
 """
 
 from __future__ import annotations
@@ -41,9 +36,6 @@ def _collect_names(tree: ast.AST) -> set[str]:
         if isinstance(node, ast.Name):
             used.add(node.id)
         elif isinstance(node, ast.Attribute):
-            # Annotated as the general expression type: this starts as an Attribute but
-            # walks down to whatever the chain's base is, so inferring the type from the
-            # first assignment makes every later step look like a type error.
             cur: ast.expr = node
             while isinstance(cur, ast.Attribute):
                 cur = cur.value
@@ -81,10 +73,6 @@ def check_functions(tree: ast.AST, report: FileReport) -> None:
                 else:
                     used.add(sub.id)
             elif isinstance(sub, ast.Attribute):
-                # Annotated as the general expression type: this starts as an
-                # Attribute but walks down to whatever the chain's base is, so
-                # inferring it from the first assignment makes every later step
-                # look like a type error.
                 base: ast.expr = sub
                 while isinstance(base, ast.Attribute):
                     base = base.value
@@ -119,9 +107,7 @@ def check_protected_access(tree: ast.AST, report: FileReport) -> None:
                        f"{node.value.id}.{node.attr}")
 
 
-# Overriding a base-class method that takes self is NOT a static-method candidate -
-# making it static would break the override. Reporting these would be noise, and a
-# linter that cries wolf gets ignored.
+# Overrides of base-class methods, which cannot become static.
 _KNOWN_OVERRIDES = {
     "format",            # logging.Formatter
     "log_message",       # BaseHTTPRequestHandler
@@ -154,13 +140,7 @@ def check_static_candidates(tree: ast.AST, report: FileReport) -> None:
                            f"{cls.name}.{node.name}() never uses self")
 
 
-# Inline suppression marker, e.g.
-#     except Exception:            # lint: allow broad-except - reason
-#     win._placeholder = False     # lint: allow protected-access - drives the real UI
-#
-# PER SITE, not a global switch: turning a rule off project-wide would silence the NEXT
-# occurrence too. An inline marker keeps the rule live everywhere else and leaves the
-# exemption on the line it applies to. The trailing reason is not parsed.
+# Per-line suppression, e.g. `except Exception:  # lint: allow broad-except - reason`.
 _SUPPRESS = "# lint: allow "
 
 
@@ -172,7 +152,6 @@ def _suppressed_lines(source: str) -> dict[int, set[str]]:
         if marker == -1:
             continue
         rest = text[marker + len(_SUPPRESS):].strip()
-        # Everything up to an optional " - reason" is the rule list.
         rules = rest.split(" - ")[0].replace(",", " ").split()
         if rules:
             out[number] = set(rules)
@@ -197,8 +176,7 @@ def scan(path: Path) -> FileReport:
     return report
 
 
-# unittest's documented place to set up per-test state is setUp, not __init__.
-# Flagging those would be the linter being wrong about the framework.
+# unittest sets up state in setUp, not __init__.
 _INIT_LIKE = {"__init__", "setUp", "setUpClass", "asyncSetUp"}
 
 
@@ -207,12 +185,7 @@ def check_instance_attrs(tree: ast.AST, report: FileReport) -> None:
     for cls in ast.walk(tree):
         if not isinstance(cls, ast.ClassDef):
             continue
-        # A DERIVED CLASS WITH NO __init__ DOES NOT OWN CONSTRUCTION, so "outside
-        # __init__" is not a finding about it - there is no __init__ for anything to be
-        # outside of. BrowserWindow's two mixins are exactly this: every attribute they
-        # touch is created by BrowserWindow.__init__ and declared as an annotation on
-        # WindowShell, so the state is visible in one place, which is what this rule is
-        # protecting. A base-less class with no __init__ is still checked.
+        # A derived class with no __init__ (the mixins) does not own construction.
         owns_init = any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                         and node.name in _INIT_LIKE for node in cls.body)
         if cls.bases and not owns_init:
@@ -238,16 +211,7 @@ def check_instance_attrs(tree: ast.AST, report: FileReport) -> None:
 
 
 def _run_ruff() -> int | None:
-    """Run ruff if it is installed. Returns its exit code, or None if it is absent.
-
-    The two linters disagreed and only one gated the build: ruff is configured in
-    pyproject.toml and run in CI but was installed nowhere locally, so this file was
-    the linter a developer ran and ruff was the one that decided the build. Two
-    releases went out red over findings a local run would have shown in a second.
-
-    If ruff is absent the report SAYS SO rather than printing a clean tree, because "no
-    findings" and "nothing looked" must never render the same.
-    """
+    """Run ruff, which gates CI, if installed. Its exit code, or None if absent."""
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "ruff", "check", str(_ROOT.parent)],
@@ -255,8 +219,7 @@ def _run_ruff() -> int | None:
             timeout=300, shell=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    # `python -m ruff` exits 1 for findings and 1 for "No module named ruff" alike, so
-    # the two are told apart by what came back on stderr.
+    # Exit 1 means findings or a missing module; stderr tells them apart.
     if "No module named" in (proc.stderr or ""):
         return None
     output = (proc.stdout or "").strip()
@@ -293,9 +256,7 @@ def main() -> int:
     print("\n" + "-" * 70)
     ruff = _run_ruff()
     if ruff is None:
-        # NOT reported as clean. An absent linter and a linter that found nothing are
-        # different facts, and this project does not let the second stand in for the
-        # first anywhere else either.
+        # An absent linter is not a clean result.
         print("ruff: NOT INSTALLED - this report is INCOMPLETE, and CI runs ruff.")
         print("      pip install -e .[dev]")
         return 0

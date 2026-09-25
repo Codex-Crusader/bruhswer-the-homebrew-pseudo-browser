@@ -1,19 +1,9 @@
-"""NetworkGuard — verifies the browser's network policy. Never applies it.
+"""Verifies the browser's firewall policy, unelevated. Applying it is the elevated
+tools/bruhswer-netpolicy.ps1.
 
-APPLYING firewall rules needs Administrator and lives in the elevated one-shot
-`tools/bruhswer-netpolicy.ps1`, which the user runs knowingly, with a rollback.
-VERIFYING them does not, and is this module, running unelevated.
-
-Measured (gate A16/A17): a -Program scoped outbound Block rule stops Edge reaching the
-router - REACHED -> BLOCKED -> REACHED, ERR_NETWORK_ACCESS_DENIED - while the internet
-stays up and other programs are unaffected, and the browser-process token cannot
-create, delete or disable those rules without elevation.
-
-The limit, stated just as loudly: rules explicitly naming 127.0.0.1 and the host's own
-LAN IP did NOT block Edge. Windows Firewall does not filter loopback and no
-configuration fixes it, so localhost protection is reported NOT ENFORCEABLE, never OK.
-
-This is not a VM boundary and this module must never imply that it is.
+Measured (gates A16/A17): a -Program-scoped Block rule stops Edge reaching the router
+while the internet and other programs are unaffected, and the browser's token cannot
+remove it. Loopback cannot be filtered, so localhost is NOT ENFORCEABLE, never OK.
 """
 
 from __future__ import annotations
@@ -30,25 +20,13 @@ _log = get_logger("network")
 
 
 class PolicyState(enum.Enum):
-    """What bruhswer can say about one row of network policy.
-
-    A TYPE, not a display string, and the difference was a real defect. When
-    policy_summary() returned prose that each UI pattern-matched against its own
-    hard-coded colour dict, the IPv6 row correctly dropping its "BLOCKED" claim made
-    network_panel.py raise KeyError and the panel vanish. Every unit test passed,
-    because nothing tied the producing module to the consuming ones.
-
-    The enum carries the MEANING; each UI maps meaning to colour, and a test asserts
-    every member has one.
-    """
+    """What bruhswer can say about one policy row. An enum, not prose: a UI matching
+    prose against its own table raised KeyError when the IPv6 row changed."""
 
     ALLOWED = "ALLOWED"
     BLOCKED = "BLOCKED"
-    # The rule exists and is correctly formed, but its effect on the browser has never
-    # been measured on this machine. Distinct from BLOCKED, which on the IPv4 rows
-    # rests on the empirical gate-A16 result.
+    # The rule is present, but its effect on the browser was never measured.
     RULE_UNMEASURED = "RULE SET, EFFECT NOT MEASURED"
-    # The platform cannot enforce it at all. Not a failure to configure.
     NOT_ENFORCEABLE = "NOT ENFORCEABLE"
 
     def __str__(self) -> str:
@@ -56,7 +34,7 @@ class PolicyState(enum.Enum):
 
 
 def _expected_rule_names() -> dict[str, str]:
-    """Rule name -> the address set it must cover. Mirrors the elevated one-shot."""
+    """Rule name -> the address set it must cover."""
     return {
         f"{config.RULE_PREFIX}-edge-deny-ipv4-private": ",".join(config.BLOCKED_IPV4),
         f"{config.RULE_PREFIX}-edge-deny-ipv6-local": ",".join(config.BLOCKED_IPV6),
@@ -64,8 +42,7 @@ def _expected_rule_names() -> dict[str, str]:
 
 
 def _normalise(addresses) -> set[str]:
-    """Windows reports CIDR back as dotted masks (10.0.0.0/255.0.0.0). Normalise both
-    forms so a rule readback can be compared with what bruhswer asked for."""
+    """Windows reports CIDR as dotted masks (10.0.0.0/255.0.0.0); normalise both forms."""
     out: set[str] = set()
     for raw in addresses or []:
         text = str(raw).strip()
@@ -78,18 +55,13 @@ def _normalise(addresses) -> set[str]:
     return out
 
 
-# Values Get-NetConnectionProfile reports for IPv6Connectivity when the adapter has no
-# usable IPv6 path. Named rather than inlined so the comparison below reads as policy.
+# IPv6Connectivity values that mean no usable IPv6 path.
 _NO_IPV6_STATES = ("nointernet", "disconnected", "localnetwork")
 
 
 def _ipv6_connectivity() -> str:
-    """What Windows says about this host's IPv6 reachability, or 'unknown'.
-
-    ADAPTER STATE ONLY. This says nothing about whether bruhswer's firewall rule works
-    - it is context for the reader, not evidence for the check, and the caller's detail
-    text is written so the two cannot be confused.
-    """
+    """This host's IPv6 adapter state, or 'unknown'. Context only, not evidence that
+    the rule works."""
     probe = sysquery.network_profiles()
     if not probe.ok:
         return "unknown"
@@ -119,12 +91,7 @@ def verify(edge_path) -> list[Check]:
     checks: list[Check] = []
     rules = sysquery.bruhswer_rules()
 
-    # A FAILED QUERY IS NOT AN ABSENT RULE. `bruhswer_rules()` used to return a bare
-    # `[]` whether the rules were missing or PowerShell had timed out, and every
-    # net.rule.* check is critical=True - so one slow query claimed "Rule is not
-    # present. Run Network Policy setup.", blocked the launch, and later fired a
-    # regression curtain. Fail-closed is preserved (UNKNOWN on a critical check still
-    # blocks); bruhswer now says it could not look rather than asserting a finding.
+    # A failed query is not an absent rule: UNKNOWN (still blocks), not "rule missing".
     if not rules.ok:
         reason = reason_for_probe(rules.status)
         for name in _expected_rule_names():
@@ -190,10 +157,7 @@ def verify(edge_path) -> list[Check]:
                          f"{rules.reason()}",
                 evidence_kind=EvidenceKind.READ_BACK))
         else:
-            # "Present, enabled, scoped to the browser, covering all ranges" next to a
-            # green dot reads as "the browser cannot reach those ranges". What bruhswer
-            # did was read the rule's definition back. That it STOPS Edge is a separate
-            # claim resting on gate A16, which this pass does not re-run.
+            # A read-back of the rule, not proof it stops Edge (gate A16, not re-run).
             checks.append(Check(
                 check_id=f"net.rule.{name}", title=f"Firewall rule {name}",
                 verdict=Verdict.PASS, critical=True,
@@ -204,9 +168,7 @@ def verify(edge_path) -> list[Check]:
                 evidence=f"addresses={sorted(actual)} {rules.reason()}",
                 evidence_kind=EvidenceKind.READ_BACK))
 
-    # Extra rules under bruhswer's prefix that bruhswer did not author. Brief SS9 lists
-    # "unexpected network rule" as a launch blocker, and it is right to: a rule we do
-    # not recognise under our own name is either stale or planted.
+    # A rule under bruhswer's prefix that bruhswer did not write is stale or planted.
     unexpected = sorted(set(by_name) - set(_expected_rule_names()))
     checks.append(Check(
         check_id="net.rule.unexpected", title="No unexpected bruhswer rules",
@@ -222,12 +184,8 @@ def verify(edge_path) -> list[Check]:
 
 
 def _tamper_check() -> list[Check]:
-    """Whether the browser could delete bruhswer's own firewall rules.
-
-    THIS CHECK MEASURES THE WRONG PROCESS. is_elevated() reports BRUHSWER's token; that
-    Edge is also unelevated follows from it being launched as a child. Sound, but
-    reasoning - hence INFERENCE rather than a green dot citing gate A17.
-    """
+    """Whether the browser could delete bruhswer's rules. INFERENCE: it measures
+    bruhswer's token, and Edge inherits it as a child."""
     probe = sysquery.is_elevated_probe()
     if probe.value is None:
         return [Check(
@@ -265,13 +223,9 @@ def _tamper_check() -> list[Check]:
 
 def _platform_limits() -> list[Check]:
     """The rows that rest on Stage 4 and are never re-measured. All HISTORICAL."""
-    # Once. The detail and the evidence string both wanted this, and calling the helper
-    # twice cost a second ~400ms network_profiles probe for the same answer.
     ipv6 = _ipv6_connectivity()
     return [
-        # IPv6: the rule's PRESENCE is checked above and can honestly PASS. Its EFFECT
-        # has never been measured on this machine, and that asymmetry with IPv4 was
-        # invisible because policy_summary() simply printed "BLOCKED" for both.
+        # IPv6: presence is checked above; the effect was never measured.
         Check(
             check_id="net.rule.ipv6.effect",
             title="IPv6 blocking proven to stop the browser",
@@ -287,7 +241,6 @@ def _platform_limits() -> list[Check]:
             evidence_kind=EvidenceKind.HISTORICAL,
             unknown_reason=UnknownReason.NEVER_MEASURED),
 
-        # The honest limitation. Reported every single time, never hidden, never green.
         Check(
             check_id="net.loopback", title="Localhost / host services blocked",
             verdict=Verdict.FAIL, critical=True, enforceable=False,
@@ -309,18 +262,9 @@ def _platform_limits() -> list[Check]:
 
 
 def policy_summary() -> list[tuple[str, PolicyState]]:
-    """What the policy actually is, for the UI. No claim beyond what was measured.
-
-    The IPv6 row is deliberately NOT "BLOCKED". Every other "BLOCKED" rests on gate
-    A16, which measured the effect empirically; nothing equivalent was ever run for
-    IPv6. The rule is present and correctly formed, which is what `verify()` checks and
-    passes honestly - but that is a different claim from "the browser cannot reach
-    fc00::/7", and this table was making the second on the strength of the first.
-
-    The gap cannot be closed from here: the rules are `-Program` scoped to msedge.exe,
-    so a probe from bruhswer's own process would measure nothing about Edge, and `app/`
-    is forbidden from importing `socket` at all.
-    """
+    """The policy rows for the UI. IPv6 is not "BLOCKED": unlike IPv4 (gate A16) its
+    effect was never measured, and a probe from bruhswer's own process would not test
+    a rule scoped to msedge.exe."""
     return [
         ("Internet", PolicyState.ALLOWED),
         ("Router", PolicyState.BLOCKED),
@@ -333,13 +277,8 @@ def policy_summary() -> list[tuple[str, PolicyState]]:
     ]
 
 
-# What kind of evidence each policy state rests on. Separate from policy_summary()
-# because the tests read that as a dict, and a third tuple element would break them.
-#
-# The row that made this necessary is "Router - BLOCKED". BLOCKED renders green, and
-# green is what a live measurement looks like everywhere else - but the proof behind it
-# is gate A16, run once and never re-run. The state is not downgraded; the panel prints
-# the evidence kind beside it so "measured earlier" stops looking like "measured now".
+# The evidence behind each state, printed beside it: "Router - BLOCKED" rests on gate
+# A16, measured once, not now.
 POLICY_EVIDENCE = {
     PolicyState.ALLOWED: EvidenceKind.INFERENCE,
     PolicyState.BLOCKED: EvidenceKind.HISTORICAL,
@@ -349,10 +288,5 @@ POLICY_EVIDENCE = {
 
 
 def policy_evidence(state) -> EvidenceKind:
-    """Evidence kind for one policy row. Never raises.
-
-    An unrecognised state falls back to INFERENCE - the weakest kind - for the same
-    reason state_colour() falls back to red: a state nobody taught this module must not
-    inherit a stronger claim than anyone checked.
-    """
+    """Evidence kind for one policy row; an unknown state gets the weakest, INFERENCE."""
     return POLICY_EVIDENCE.get(state, EvidenceKind.INFERENCE)

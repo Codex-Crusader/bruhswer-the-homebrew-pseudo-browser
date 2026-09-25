@@ -1,18 +1,5 @@
-"""Tests for runtime re-verification.
-
-The part worth testing here is not the thread - it is the DECISION about what counts as
-a control that stopped holding. Getting that wrong in either direction is bad in a way
-this project cares about:
-
-  too quiet  a control silently degrades and the light stays green, which is the
-             launch-time-snapshot defect the worker exists to end
-  too loud   the user is warned every 60 seconds about a check that was already
-             UNKNOWN and has not changed, and learns to dismiss the warning that
-             actually means something
-
-`find_regressions` is a pure function over two results, so all of that is testable
-without Tk, without a browser, and without a thread.
-"""
+"""Runtime re-verification: mainly what counts as a control that stopped holding.
+Too quiet leaves a stale green light; too loud trains the user to dismiss warnings."""
 
 from __future__ import annotations
 
@@ -56,12 +43,7 @@ class TestFindRegressions(unittest.TestCase):
                          (("net.rule.x", "title for net.rule.x"),))
 
     def test_pass_to_unknown_is_also_reported(self):
-        """'We can no longer verify this' is not a quieter kind of good news.
-
-        Under this project's rule UNKNOWN never rounds up to PASS, so a control that
-        drops from verified to unverifiable must move the indicator exactly as a
-        verified failure does.
-        """
+        """PASS -> UNKNOWN is a regression like PASS -> FAIL."""
         before = _result(_check("browser.sandbox", Verdict.PASS))
         after = _result(_check("browser.sandbox", Verdict.UNKNOWN))
         self.assertEqual(verify_worker.find_regressions(before, after),
@@ -84,26 +66,19 @@ class TestFindRegressions(unittest.TestCase):
         self.assertEqual(verify_worker.find_regressions(before, after), ())
 
     def test_unenforceable_checks_are_excluded(self):
-        """net.loopback is a permanent, by-design FAIL describing the PLATFORM.
-
-        If it were compared, every single cycle would report a regression and the
-        warning would be worthless.
-        """
+        """net.loopback is a permanent FAIL; comparing it would warn every cycle."""
         before = _result(_check("net.loopback", Verdict.PASS, enforceable=False))
         after = _result(_check("net.loopback", Verdict.FAIL, enforceable=False))
         self.assertEqual(verify_worker.find_regressions(before, after), ())
 
     def test_a_check_that_disappears_is_not_reported(self):
-        """Checks come and go with session state - downloads.* only exists once a
-        session is open. A vanished check is not a failed one."""
+        """downloads.* exists only during a session; vanishing is not failing."""
         before = _result(_check("downloads.quarantine", Verdict.PASS))
         after = _result(_check("net.rule.x", Verdict.PASS))
         self.assertEqual(verify_worker.find_regressions(before, after), ())
 
     def test_a_check_that_vanishes_because_its_guard_crashed_is_reported(self):
-        """The crash replaces the guard's checks with one UNKNOWN of its own, which is
-        new rather than PASS -> not-PASS, so nothing warned that browser.sandbox had
-        gone from verified to not measured at all."""
+        """A crash replaces the guard's checks with a new id, so nothing warned."""
         before = _result(_check("browser.sandbox", Verdict.PASS),
                          _check("browser.cmdline", Verdict.PASS))
         after = _result(_check("browser.cmdline", Verdict.PASS),
@@ -134,24 +109,18 @@ class TestWorkerLifecycle(unittest.TestCase):
         worker = verify_worker.VerifyWorker(interval=0.01)
         for generation in range(5):
             worker.submit(_FakeRequest(generation))
-        # protected-access: asserts the worker's threading contract
         self.assertEqual(worker._requests.qsize(), 1)  # lint: allow protected-access
-        # protected-access: asserts the worker's threading contract.
         self.assertEqual(
             worker._requests.get_nowait().generation, 4)  # lint: allow protected-access
 
     def test_stop_returns_promptly_even_while_a_pass_is_running(self):
-        """Closing bruhswer must not block on an in-flight PowerShell query.
-
-        Simulates the real hazard: the worker is inside a slow call when the user
-        closes the window. stop() must return in well under the length of that call.
-        """
+        """stop() returns promptly while the worker is inside a slow call."""
         worker = verify_worker.VerifyWorker(interval=0.01)
         entered = threading.Event()
 
         def slow_verification(_request):
             entered.set()
-            time.sleep(3.0)          # stands in for subprocess.run(timeout=60)
+            time.sleep(3.0)
             return _result()
 
         original = verify_worker.ctrl.run_verification
@@ -171,8 +140,7 @@ class TestWorkerLifecycle(unittest.TestCase):
             f"stop() blocked for {elapsed:.1f}s; bruhswer would hang on close")
 
     def test_a_crashing_pass_does_not_kill_the_worker(self):
-        """If the thread dies, re-verification stops silently and the last result stays
-        on screen looking current - the exact defect the worker exists to prevent."""
+        """A dead thread would leave the last result looking current."""
         worker = verify_worker.VerifyWorker(interval=0.01)
         calls: queue.Queue[int] = queue.Queue()
 
@@ -205,26 +173,14 @@ class TestWorkerLifecycle(unittest.TestCase):
 
 
 class TestWorkerRestartsAfterStop(unittest.TestCase):
-    """Regression: closing a session and opening a new one killed re-verification.
-
-    stop() sets the shutdown Event; start() did not clear it. So the SECOND start()
-    in a session's life spawned a thread that read a still-set event and exited at
-    once. submit() then queued requests nobody would ever read, the drain loop found
-    nothing forever, and the status lights stayed frozen on the last result while
-    still being presented as current - the launch-time-snapshot defect the worker
-    exists to remove, reintroduced by one missing line.
-
-    This is the ordinary path, not an edge case: close session -> "New session".
-    """
+    """Regression: after stop(), a second start() exited at once on the still-set
+    event, freezing the lights. The ordinary close-then-new-session path."""
 
     def test_worker_restarts_after_stop(self):
         worker = verify_worker.VerifyWorker(interval=0.01)
         ran: queue.Queue[int] = queue.Queue()
 
         def record_and_pass(request):
-            # A real function, not a lambda abusing a tuple to sequence two
-            # expressions. queue.put() returns None, so using it as a value was both
-            # opaque and something every inspector flags.
             ran.put(request.generation)
             return _result(_check("ok", Verdict.PASS))
 
@@ -235,9 +191,9 @@ class TestWorkerRestartsAfterStop(unittest.TestCase):
             worker.submit(_FakeRequest(0))
             self.assertEqual(ran.get(timeout=5.0), 0, "first cycle never ran")
 
-            worker.stop()               # user closes the session
+            worker.stop()
 
-            worker.start()              # user opens a new one
+            worker.start()
             worker.submit(_FakeRequest(1))
             try:
                 seen = ran.get(timeout=5.0)
@@ -245,9 +201,7 @@ class TestWorkerRestartsAfterStop(unittest.TestCase):
                 self.fail("worker never ran again after stop()/start(); "
                           "re-verification was silently dead for the new session")
             self.assertEqual(seen, 1)
-            # protected-access: asserts the worker's threading contract
             self.assertIsNotNone(worker._thread)  # lint: allow protected-access
-            # protected-access: asserts the worker's threading contract
             self.assertTrue(worker._thread.is_alive())  # lint: allow protected-access
         finally:
             verify_worker.ctrl.run_verification = original
@@ -255,18 +209,9 @@ class TestWorkerRestartsAfterStop(unittest.TestCase):
 
 
 class TestSubmitWakesTheWorker(unittest.TestCase):
-    """Regression: a submitted request waited out the whole interval.
-
-    Found by the GUI walkthrough, which asks for a re-verification and waits for it to
-    reach the UI. It had been passing on luck - only when the submit happened to land
-    near the start of a cycle. With a 60s interval, a request handed over just after a
-    pass began sat untouched for nearly a minute, so "re-verify this session now" was
-    up to a minute late for the user too.
-    """
+    """Regression: a mid-cycle submit waited out the whole 60s interval."""
 
     def test_a_submit_mid_cycle_is_picked_up_promptly(self):
-        # An interval far longer than the test's patience: if submit() does not cut
-        # the wait short, this cannot pass.
         worker = verify_worker.VerifyWorker(interval=30.0)
         seen: queue.Queue[int] = queue.Queue()
 
@@ -281,7 +226,6 @@ class TestSubmitWakesTheWorker(unittest.TestCase):
             worker.submit(_FakeRequest(0))
             self.assertEqual(seen.get(timeout=5.0), 0, "first pass never ran")
 
-            # The worker is now inside its 30s wait. A fresh submit must interrupt it.
             started = time.perf_counter()
             worker.submit(_FakeRequest(1))
             try:
@@ -296,14 +240,8 @@ class TestSubmitWakesTheWorker(unittest.TestCase):
 
 
 class TestWarningCanBeWithdrawn(unittest.TestCase):
-    """Regression: a transient failure raised a warning nothing could ever clear.
-
-    One failed PowerShell query flips a check to UNKNOWN for a single cycle. The next
-    cycle succeeds and it is PASS again - but find_regressions only ever reports
-    PASS -> not-PASS, so no later update mentions the check, and a red "something
-    changed while you were browsing" curtain would stay up over a session where
-    nothing had. passing_ids() is what lets the window take the warning back.
-    """
+    """Regression: a one-cycle UNKNOWN raised a warning nothing could clear;
+    passing_ids() lets the window withdraw it."""
 
     def test_passing_ids_reports_recovery(self):
         recovered = _result(_check("browser.sandbox", Verdict.PASS),
@@ -324,9 +262,7 @@ class TestWarningCanBeWithdrawn(unittest.TestCase):
         regressions = verify_worker.find_regressions(good, blip)
         self.assertEqual([cid for cid, _t in regressions], ["browser.sandbox"])
 
-        # Next cycle recovers. Nothing is reported as a regression...
         self.assertEqual(verify_worker.find_regressions(blip, good), ())
-        # ...so the ONLY thing that can clear the warning is the passing set.
         self.assertIn("browser.sandbox", verify_worker.passing_ids(good))
 
 
@@ -356,9 +292,7 @@ class _FakeRoot:
 
 
 class _AsyncVerifyWindow(verification_ui.VerificationUIMixin):
-    """Enough surface for _verify_async, and nothing else. _after does not schedule
-    anything on its own - the test calls _tick() to simulate one Tk `after` cycle,
-    the same relationship a real Tk mainloop has to a queued callback."""
+    """Just enough for _verify_async. _tick() stands in for one Tk `after` cycle."""
 
     def __init__(self) -> None:
         self.controller = _StubController()
@@ -382,25 +316,14 @@ class _AsyncVerifyWindow(verification_ui.VerificationUIMixin):
 
 
 class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
-    """_verify_async: the one-shot pass behind startup() and the BRUH CHECK panel.
-
-    Both used to call controller.verify() directly on the Tk thread, freezing the
-    window for the full ~5.5s a pass measures at, with the "Running security
-    verification..." status text never actually painting before the freeze started.
-    Pinned here the same way TestWorkerLifecycle pins VerifyWorker's contract: real
-    threading, mocked run_verification, no Tk mainloop.
-    """
+    """_verify_async, behind startup() and BRUH CHECK, which once froze the window
+    for the whole pass. Real threads, mocked run_verification."""
 
     def test_request_is_built_synchronously_before_any_thread_could_run(self):
-        """verification_request()'s own docstring: MUST run on the calling thread.
-        Only run_verification() may cross the thread boundary - this is what makes
-        that safe, and it must not quietly start happening off-thread instead."""
+        """verification_request() runs on the calling thread, before any worker."""
         win = _AsyncVerifyWindow()
         win._verify_async(  # lint: allow protected-access
             "persistent", lambda _result: None)
-        # No _tick() yet, so nothing async has had a chance to run. If the request
-        # were built lazily - inside the worker thread instead of before it starts -
-        # this would still be empty here.
         self.assertEqual(win.controller.requested_modes, ["persistent"])
 
     def test_result_reaches_on_done_via_a_tick_not_the_background_thread(self):
@@ -428,8 +351,7 @@ class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
             verification_ui.ctrl.run_verification = original
 
         self.assertTrue(seen_from, "on_done was never called")
-        # on_done must run on the thread that calls _tick() (the Tk thread stand-in),
-        # never on the worker thread - it touches self.result and widgets.
+        # on_done runs on the _tick() thread, never the worker.
         self.assertIs(seen_from[0], calling_thread)
         self.assertIs(seen_from[1].checks[0].verdict, Verdict.PASS)
 
@@ -451,20 +373,12 @@ class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
         finally:
             verification_ui.ctrl.run_verification = original
 
-        # A raised worker must not vanish silently - see VerifyWorker._run_once for
-        # the same rule applied to the ongoing loop.
         self.assertEqual(received, [], "on_done ran on a failed pass")
         self.assertTrue(win.status, "no status was ever set for the failed pass")
 
     def test_a_second_call_while_one_is_running_is_refused_not_raced(self):
-        """The concurrency hazard this async version introduced and did not have
-        before: the old synchronous controller.verify() accidentally serialised
-        repeat clicks by freezing the window for the whole pass. A blocked-launch
-        curtain's "Check again" button, or the BRUH CHECK menu item, could not
-        physically be double-clicked. Async removed that accident; two overlapping
-        startup() calls could each decide independently to open a session, and the
-        second's controller.stop() would tear down what the first had just started.
-        """
+        """The old frozen window serialised double-clicks by accident; async needs an
+        explicit guard, or two startup() calls race."""
         gate = threading.Event()
         calls = 0
 
@@ -483,9 +397,7 @@ class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
                 "persistent", lambda _result: None)
             self.assertEqual(win.controller.requested_modes, ["persistent"])
 
-            # A second call arrives while the first is still gated open - this is
-            # the double-click. It must not build a second request or start a
-            # second thread.
+            # The double-click.
             win._verify_async(  # lint: allow protected-access
                 "persistent", lambda _result: None)
             self.assertEqual(win.controller.requested_modes, ["persistent"],
@@ -502,8 +414,7 @@ class TestVerifyAsyncRunsOffTheCallingThread(unittest.TestCase):
                 time.sleep(0.01)
             self.assertFalse(in_flight(), "flag was never cleared")
 
-            # And a THIRD call, after the first has actually finished, must go
-            # through normally rather than being refused forever.
+            # A call after the first finishes goes through.
             received: list = []
             win._verify_async(  # lint: allow protected-access
                 "persistent", received.append)

@@ -9,8 +9,6 @@ from ... import config
 from ...verdict import Verdict
 
 
-# Single source of truth. Everything that renders a verdict points here, so the control
-# panel and the browser window cannot drift and show the same verdict two ways.
 def _verdict_colours() -> dict[Verdict, str]:
     return {Verdict.PASS: config.OK_GREEN,
             Verdict.FAIL: config.BAD_RED,
@@ -26,8 +24,7 @@ def refresh_palette() -> None:
 COLOUR = _verdict_colours()
 WORD = {Verdict.PASS: "OK", Verdict.FAIL: "EXPOSED", Verdict.UNKNOWN: "UNKNOWN"}
 
-# Colour AND a word for every verdict, so the state survives being read by someone who
-# cannot separate the colours. A dot alone carries the whole meaning in hue.
+# A shape per verdict, so the colour is never the only signal.
 SHAPE = {Verdict.PASS: "●", Verdict.FAIL: "■", Verdict.UNKNOWN: "▲"}
 NOT_ENFORCEABLE_SHAPE = "▬"
 
@@ -74,12 +71,7 @@ _label_font: tkfont.Font | None = None
 
 
 def _elide(text: str, width_chars: int) -> str:
-    """Shorten to fit the label column, keeping BOTH ends of the text.
-
-    Cutting the tail would be wrong here: 11 of the privacy preference keys share
-    their first 34 characters, so a head-only label renders eleven different
-    settings - each with its own verdict - as the same string.
-    """
+    """Shorten, keeping both ends: 11 privacy keys share their first 34 characters."""
     global _label_font
     if _label_font is None:
         _label_font = tkfont.Font(font=LABEL_FONT)

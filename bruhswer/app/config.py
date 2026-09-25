@@ -1,9 +1,5 @@
-"""BRUHWSER configuration: fixed paths, fixed policy, no dynamic execution.
-
-Everything here is a literal authored in this file. Nothing is derived from a URL, a
-filename, an HTTP header, a downloaded file, or any other browser-controlled input.
-Why each value is what it is: docs/ARCHITECTURE.md.
-"""
+"""Fixed paths and policy. Every value is a literal; none comes from browser input.
+The reasons for the values are in docs/ARCHITECTURE.md."""
 
 from __future__ import annotations
 
@@ -77,8 +73,7 @@ def apply_light() -> None:
     _apply(_LIGHT)
 
 
-# Keyed by network_guard.PolicyState's VALUE, so this module need not import the
-# network layer. One map: every UI reads it, none keeps a copy.
+# Keyed by network_guard.PolicyState value, so config imports nothing.
 POLICY_STATE_COLOUR = {
     "ALLOWED": FG_DIM,
     "BLOCKED": OK_GREEN,
@@ -90,13 +85,11 @@ POLICY_STATE_COLOUR = {
 POLICY_STATE_UNKNOWN_COLOUR = BAD_RED
 POLICY_STATE_UNKNOWN_LABEL = "UNRECOGNISED POLICY STATE"
 
-# So a verdict is never carried by colour alone. chrome.SHAPE covers the three
-# verdicts; these two are for rows that are not verdicts at all.
+# Shapes for rows that are not verdicts; chrome.SHAPE covers the verdicts.
 SHAPE_UNKNOWN = "\u25cb"
 SHAPE_LIMITATION = "\u25ac"
 
 # --- paths ---------------------------------------------------------------------
-# All BRUHWSER state lives under one directory. Nothing is written anywhere else.
 _LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
 if not _LOCALAPPDATA:
     raise RuntimeError(
@@ -112,65 +105,53 @@ QUARANTINE = ROOT / "quarantine"
 LOGS = ROOT / "logs"
 STATE = ROOT / "state"
 
-# Fixed absolute paths, checked in order. Never taken from PATH, which the user's own
-# environment can write.
+# Checked in order. Never taken from PATH.
 EDGE_CANDIDATES = (
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
 )
 
-# Compared as whole distinguished-name fields, never as substrings: a substring test
-# accepted "CN=Not Microsoft Corporation Ltd". The issuer's O is checked and its CN is
-# not, on purpose: the CN names a CA generation (PCA 2011, PCA 2024) that Microsoft
-# rotates, and pinning it would turn the next rotation into a critical FAIL.
+# Whole-field matches; a substring accepted "CN=Not Microsoft Corporation Ltd". The
+# issuer CN is not pinned: Microsoft rotates it (PCA 2011, PCA 2024).
 EDGE_EXPECTED_SUBJECT_CN = "Microsoft Corporation"
 EDGE_EXPECTED_SUBJECT_O = "Microsoft Corporation"
 EDGE_EXPECTED_ISSUER_O = "Microsoft Corporation"
 
-# --- Windows tooling (fixed absolute paths) -------------------------------------
-# CREATE_NO_WINDOW, passed as `creationflags` to every helper process, or each of the
-# dozens of PowerShell and icacls calls would pop up a console window.
+# --- Windows tooling ------------------------------------------------------------
+# CREATE_NO_WINDOW, so helper processes do not flash a console.
 NO_WINDOW = 0x08000000
 
 SYSTEM32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
 POWERSHELL = SYSTEM32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
 ICACLS = SYSTEM32 / "icacls.exe"
 
-# FILE_ATTRIBUTE_REPARSE_POINT. The test that actually detects a directory junction:
-# Path.is_symlink() returns False for one, so the obvious check is inert.
+# Detects a junction; Path.is_symlink() returns False for one.
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
-# Mark of the Web: the NTFS alternate data stream Windows reads to decide whether a
-# file came from the internet, which is what makes SmartScreen and Office Protected
-# View engage when the user opens it. shutil.copy2 does not carry it on Python 3.11
-# (measured), so export writes it on the copy. Zone 3 is URLZONE_INTERNET.
+# Mark of the Web, which makes SmartScreen check an opened file. shutil.copy2 drops it
+# on Python 3.11 (measured), so export writes it. Zone 3 is URLZONE_INTERNET.
 ZONE_IDENTIFIER_STREAM = "Zone.Identifier"
 ZONE_ID_INTERNET = 3
 
 # --- runtime re-verification ----------------------------------------------------
-# One pass starts 14 helper processes and takes 5.5s measured, so it runs on a worker
-# thread and never on the Tk thread. See app/ui/verify_worker.py.
+# A pass takes ~2.4s (measured), so it runs on a worker thread, never the Tk thread.
 VERIFY_INTERVAL_SECONDS = 60.0
 
-# Tk-thread queue poll. Cheap and non-blocking, NOT a verification.
+# Tk-thread queue poll, not a verification.
 VERIFY_DRAIN_MS = 250
 
 # Bounded join on teardown; the worker can be inside a 60s subprocess call.
 VERIFY_JOIN_TIMEOUT_SECONDS = 2.0
 
-# Slice the worker sleeps in, so a submitted request is picked up promptly.
 VERIFY_WAKE_POLL_SECONDS = 0.25
 
 # --- hosting the browser window -------------------------------------------------
-# Resize, then CONFIRM it landed (embed.is_fitted), rather than wait a fixed time.
 FIT_MAX_ATTEMPTS = 3
 FIT_RETRY_MS = 120
 HOST_MAX_ATTEMPTS = 25
 
 # --- disposable session overwrite -----------------------------------------------
-# Hygiene, not an erasure guarantee - see session_manager.NOT_GUARANTEED. The cap
-# exists because a profile cache runs to gigabytes; the small files hold the
-# identifying material. Files above it are skipped, counted, and reported.
+# Not erasure. Caches run to gigabytes; larger files are skipped and reported.
 DISPOSABLE_OVERWRITE_MAX_BYTES = 8 * 1024 * 1024
 
 OVERWRITE_CHUNK_BYTES = 256 * 1024
@@ -179,7 +160,7 @@ OVERWRITE_CHUNK_BYTES = 256 * 1024
 HASH_CHUNK_BYTES = 128 * 1024
 
 # --- panic key ------------------------------------------------------------------
-# Ctrl+Shift+End, registered globally so it fires while the browser has focus.
+# Ctrl+Shift+End, global so it fires while the browser has focus.
 PANIC_MOD_ALT = 0x0001
 PANIC_MOD_CONTROL = 0x0002
 PANIC_MOD_SHIFT = 0x0004
@@ -190,22 +171,17 @@ PANIC_HOTKEY_MODIFIERS = PANIC_MOD_CONTROL | PANIC_MOD_SHIFT | PANIC_MOD_NOREPEA
 PANIC_HOTKEY_VK = PANIC_VK_END
 PANIC_HOTKEY_LABEL = "Ctrl+Shift+End"
 
-# Only has to be unique within the registering thread, which registers exactly one.
 PANIC_HOTKEY_ID = 1
 
-# TerminateProcess is asynchronous, so an exit must be waited for to be CONFIRMED.
 PANIC_EXIT_WAIT_MS = 2000
 
 PANIC_JOIN_TIMEOUT_SECONDS = 2.0
 
 # --- network policy -------------------------------------------------------------
-# Deliberately BRUHWSER while the product name is lowercase. Renaming is a migration,
-# not a case change: the app would fail closed on "rule not present" while two
-# perfectly good rules sat on the host under the old name.
+# Stays BRUHWSER: renaming would orphan the rules already on users' machines.
 RULE_PREFIX = "BRUHWSER"
 
-# Measured effective in Stage 4 gate A16. Deliberately NOT included: 100.64.0.0/10
-# (CGNAT), which some ISPs put the user's own path to the internet inside.
+# Measured effective (gate A16). Not CGNAT 100.64.0.0/10: some ISPs route through it.
 BLOCKED_IPV4 = (
     "10.0.0.0/8",
     "172.16.0.0/12",
@@ -213,7 +189,6 @@ BLOCKED_IPV4 = (
     "169.254.0.0/16",
 )
 
-# Treated separately on purpose: IPv4 rules do not protect IPv6.
 BLOCKED_IPV6 = (
     "fc00::/7",
     "fe80::/10",
@@ -225,8 +200,7 @@ CAPTIVE_PORTAL_WARNING = (
     "until you turn network policy off, sign in, and turn it back on."
 )
 
-# NOT enforceable: Windows Firewall does not filter loopback, so no rule stops the
-# browser reaching these. Listed for honest reporting only.
+# Reachable anyway (loopback is not filtered); listed for reporting only.
 DEV_SERVICE_PORTS = (
     63342,  # PyCharm built-in server
     5173,   # Vite
@@ -239,7 +213,6 @@ DEV_SERVICE_PORTS = (
 )
 
 # --- Edge command line ----------------------------------------------------------
-# None of these weakens a security control. What is never passed is DANGEROUS_FLAGS.
 BASE_EDGE_FLAGS = (
     "--no-first-run",
     "--no-default-browser-check",
@@ -248,11 +221,8 @@ BASE_EDGE_FLAGS = (
     "--no-service-autorun",
     # Measured: without this a fresh profile lands on an ad/redirect page.
     "--disable-features=EdgeShoppingAssistant,EdgeCollections,MsaAutoSignIn",
-    # Suppresses the "Restore pages" bubble. Hides a prompt, disables no control.
     "--hide-crash-restore-bubble",
-    # Measured: stops the SYNC of a fresh profile into the Windows account. It does
-    # NOT stop the sign-in, which no switch prevents - privacy_guard reports that
-    # residual as NOT ENFORCEABLE rather than hiding it.
+    # Measured: stops the sync, not the sign-in (reported NOT ENFORCEABLE).
     "--disable-sync",
 )
 
@@ -268,10 +238,8 @@ DANGEROUS_FLAGS = (
     "--load-extension",
 )
 
-# --- IPC ------------------------------------------------------------------------
-# There is none, and that is the design: the UI and the controller run in the same
-# process. tests/test_security.py asserts bruhswer opens no listening socket and no
-# named pipe.
+# There is no IPC: the UI and controller share one process, and a test asserts no
+# listening socket or named pipe exists.
 
 
 def ensure_dirs() -> None:

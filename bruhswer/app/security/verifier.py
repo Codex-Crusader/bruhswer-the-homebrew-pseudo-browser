@@ -1,11 +1,7 @@
-"""SecurityVerifier — the one place that decides whether bruhswer may launch.
+"""The one place that decides whether bruhswer may launch.
 
-Fail-closed (brief SS8, SS9): a critical check must PASS. UNKNOWN blocks. There is no
-"continue anyway" button, and no browser-reachable way to turn this off.
-
-The verifier does not trust its own intentions. It asks the operating system what is
-actually true, and reports UNKNOWN when it cannot find out -- because a green light
-that was never verified is the exact defect this project treats as a vulnerability.
+Fail-closed: a critical check must PASS, and UNKNOWN blocks. There is no "continue
+anyway". Checks ask the OS what is true and report UNKNOWN when they cannot find out.
 """
 
 from __future__ import annotations
@@ -28,13 +24,11 @@ from . import browser_guard, integrity
 
 _log = get_logger("verifier")
 
-# "Asked, and there are none" - as opposed to None, which means "could not ask".
-# A module-level tuple rather than a mutable [] default, so nothing can append to it.
+# "Asked, and there are none", as opposed to None, "could not ask".
 NO_RENDERERS: tuple[int, ...] = ()
 
-# The middle segment of a crashed guard's check_id: "<category>.guard.<guard name>".
-# Named under the CATEGORY its checks report in, so the status row that would have
-# shown those checks shows the crash instead of staying green without them.
+# A crashed guard's check is "<category>.guard.<name>", so its category's status row
+# shows the crash.
 _GUARD_FAILURE_SEGMENT = "guard"
 
 
@@ -52,13 +46,7 @@ def guard_failure_category(check_id: str) -> str | None:
 
 @dataclass(frozen=True)
 class GuardTiming:
-    """How long one guard took, how many checks it produced, and their category.
-
-    Collected into the result object rather than a module-level list, so it needs no
-    locking - the UI thread and the verify worker each build their own. `category` is
-    the check_id prefix every check from this guard carries; test_evidence_model.py
-    holds each guard to it on a live pass.
-    """
+    """One guard's duration, check count, and the check_id prefix all its checks carry."""
 
     name: str
     duration_ms: float
@@ -70,8 +58,7 @@ class GuardTiming:
 class VerificationResult:
     checks: list[Check] = field(default_factory=list)
     timings: list[GuardTiming] = field(default_factory=list)
-    # Measured elapsed time of the pass. Guards overlap, so this is NOT the sum of
-    # their durations.
+    # Measured; guards overlap, so this is not the sum of their durations.
     wall_ms: float = 0.0
 
     @property
@@ -95,12 +82,8 @@ class VerificationResult:
 
 def _run_guard(name: str, category: str,
                guard: Callable[[], list[Check]]) -> tuple[list[Check], GuardTiming]:
-    """Run one guard. Never raises.
-
-    A crash becomes one CRITICAL UNKNOWN. The guard's own checks are absent, and
-    blocks_launch() cannot see an absent check, so a non-critical stand-in let a
-    crash in a critical guard leave may_launch True.
-    """
+    """Run one guard. Never raises: a crash becomes one CRITICAL UNKNOWN, because the
+    guard's own checks are absent and blocks_launch() cannot see an absent check."""
     started = time.perf_counter()
     try:
         produced = guard()
@@ -125,23 +108,18 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
                download_dir: Path | None = None,
                renderer_pids: Sequence[int] | None = NO_RENDERERS
                ) -> VerificationResult:
-    """`renderer_pids`: [] means asked and found none, None means the query failed.
+    """Run every guard. `renderer_pids`: [] = asked, none found; None = query failed.
 
-    The default [] is right for the pre-launch call in Controller.start(), where no
-    session exists yet.
-
-    The guards are independent and read-only, and almost all their time is spent
-    waiting on PowerShell, so they run at once: a pass costs its slowest guard, not
-    the sum (measured 5.0 s serial). Results are collected in SUBMISSION order, so
-    the check order, and slicing checks by `timings`, never depend on thread timing.
+    The guards are independent and read-only and mostly wait on PowerShell, so they
+    run at once (measured 4.7 s serial, 2.4 s parallel). Results are collected in
+    submission order, so check order never depends on thread timing.
     """
     guards: list[tuple[str, str, Callable[[], list[Check]]]] = [
         ("edge", "edge", lambda: edge.verify_runtime(edge_path))]
     if edge_path is not None:
         guards += [
             ("browser", "browser", lambda: browser_guard.verify(profile_dir, argv)),
-            # Not `renderer_pids or []`: that collapsed None ("could not ask") into
-            # [] ("asked, and there are none").
+            # Not `renderer_pids or []`, which turned None into [].
             ("sandbox", "browser",
              lambda: browser_guard.verify_renderer_sandbox(renderer_pids)),
             ("network", "net", lambda: network_guard.verify(edge_path)),
@@ -178,11 +156,7 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
 
 
 def _controller_checks() -> list[Check]:
-    """bruhswer's own privilege level. LIVE - it reads THIS process's token.
-
-    critical=True, so UNKNOWN blocks launch - which is why sysquery only ever memoises
-    a definite True/False.
-    """
+    """Whether bruhswer itself is elevated. Critical, so UNKNOWN blocks launch."""
     probe = sysquery.is_elevated_probe()
     if probe.value is None:
         return [Check("controller.privilege", "bruhswer runs unelevated",
@@ -237,10 +211,7 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
                     evidence_kind=EvidenceKind.READ_BACK,
                     unknown_reason=reason)]
 
-    # Measured, not assumed. See privacy_guard.verify_account_signin for why this
-    # check exists at all. Reported as NOT ENFORCEABLE rather than FAIL, because
-    # bruhswer has no in-scope way to prevent the sign-in - and never as PASS while
-    # an account is actually present.
+    # NOT ENFORCEABLE, not FAIL: bruhswer cannot prevent Edge's sign-in.
     signed_in, sign_detail = privacy_guard.verify_account_signin(profile_dir)
     if sign_detail == "no profile yet":
         checks.append(Check(
@@ -250,10 +221,7 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
             evidence=sign_detail, evidence_kind=EvidenceKind.READ_BACK,
             unknown_reason=UnknownReason.NO_PROFILE_YET))
     elif sign_detail == privacy_guard.PREFS_UNREADABLE:
-        # "Could not read the file" is NOT "no account is signed in". This branch used
-        # to fall through to the else below and render as a green PASS asserting that
-        # no Microsoft account was attached - on the strength of a file bruhswer had
-        # just failed to parse.
+        # An unreadable file is not "no account"; this was once a green PASS.
         checks.append(Check(
             "privacy.account", "Browser account sign-in", Verdict.UNKNOWN,
             critical=False,
@@ -283,18 +251,10 @@ def _privacy_checks(profile_dir: Path, mode: str) -> list[Check]:
 
 
 def _download_checks(profile_dir: Path, download_dir: Path) -> list[Check]:
-    """CRITICAL. If this is wrong, downloads land in the user's real Downloads folder.
+    """CRITICAL: if wrong, downloads land in the real Downloads folder, as they once did.
 
-    That is not hypothetical - it is exactly what bruhswer did until a download probe
-    caught it. The check is critical because a silently-wrong download path turns the
-    quarantine feature into a false claim, and a false security claim is the one defect
-    class this project treats as a vulnerability in its own right.
-
-    TITLE WORDING IS DELIBERATE, for the same reason as integrity._TITLE. It was
-    "Downloads go to quarantine" - a statement about what will happen to a file, made
-    on the strength of reading two keys out of JSON. The narrower title is what the
-    evidence supports, and it still catches the defect this check was written for
-    (Edge ignoring --download-directory), which showed up as the preference being absent.
+    The title says the folder is SET, not that files go there: it rests on reading the
+    preferences, not on watching a download.
     """
     ok, detail = privacy_guard.verify_download_directory(profile_dir, download_dir)
     if not ok and detail == "no profile yet":
@@ -304,10 +264,7 @@ def _download_checks(profile_dir: Path, download_dir: Path) -> list[Check]:
                       evidence=detail, evidence_kind=EvidenceKind.READ_BACK,
                       unknown_reason=UnknownReason.NO_PROFILE_YET)]
     if not ok and detail == privacy_guard.PREFS_UNREADABLE:
-        # "Could not read the file" is NOT "downloads would not be quarantined". This
-        # check is critical, so UNKNOWN still blocks launch - fail-closed is preserved -
-        # but it no longer reports a definite FAIL on the strength of a file bruhswer
-        # just failed to parse.
+        # An unreadable file is UNKNOWN (still blocks launch), not a definite FAIL.
         return [Check(
             "downloads.quarantine", _DOWNLOAD_TITLE,
             Verdict.UNKNOWN, critical=True,
@@ -332,14 +289,8 @@ _DOWNLOAD_TITLE = "Download folder is set to quarantine"
 
 
 def _dns_checks() -> list[Check]:
-    """DNS is reported UNKNOWN, deliberately.
-
-    Stage 4 could not establish whether this machine's DNS is encrypted: a local
-    resolver (NextDNS) sits in the path, so an external diagnostic cannot see what the
-    browser actually sent, and packet capture needs a driver this project will not
-    install. Brief SS24 is explicit that those measurements must not be reused and that
-    fabricated certainty is not acceptable.
-    """
+    """Always UNKNOWN: whether queries leave encrypted cannot be measured from here
+    without a packet-capture driver bruhswer will not install."""
     doh_probe = sysquery.doh_servers()
     servers_probe = sysquery.dns_servers()
 
@@ -367,8 +318,7 @@ def _dns_checks() -> list[Check]:
     detail += (" bruhswer cannot confirm whether queries actually leave encrypted, "
                "so this is reported as UNKNOWN rather than guessed.")
 
-    # One probe failing is not zero rows. Counting an unread list as "none found"
-    # is the overclaim this project treats as a defect.
+    # One failed probe is not zero rows.
     partial = not (doh_probe.ok and servers_probe.ok)
     if partial:
         detail += (" Part of this PC's DNS configuration could not be read, so the "

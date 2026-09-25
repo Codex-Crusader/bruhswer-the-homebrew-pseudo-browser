@@ -1,32 +1,13 @@
-"""bruhswer's read-only PowerShell queries.
+"""bruhswer's read-only PowerShell queries, for Windows state with no stdlib binding.
 
-Not the only place a program runs: edge.py, embed.py, controller.py and
-browser_guard.py call subprocess directly, with the same fixed paths, argument lists
-and no shell. docs/ARCHITECTURE.md lists them and the values they format.
+Rules: an argument list and never a shell; a fixed PowerShell path; every script a
+constant authored here; nothing modifies the system. There is no generic run(command).
+edge.py, embed.py, controller.py and browser_guard.py also run programs, under the same
+rules (docs/ARCHITECTURE.md).
 
-Some Windows state - firewall rules, network profile, Defender status - has no usable
-standard-library binding, and adding a dependency for it would grow the trusted stack.
-So a small number of fixed, audited PowerShell queries are used instead.
-
-The rules, and they are not negotiable:
-
-  - subprocess ALWAYS gets an explicit argument list. `shell=True` appears nowhere.
-  - the executable is a fixed absolute path from config, never resolved via PATH.
-  - every script is a CONSTANT authored here. The only substituted values are
-    bruhswer's own literals from config.py, never anything a webpage can influence.
-  - nothing here modifies system state. Changes go through the elevated one-shot in
-    tools/, with explicit consent and a rollback.
-
-There is deliberately no generic `run(command)`, so no caller can ask this module to
-execute something arbitrary.
-
-EVERY QUERY RETURNS A `Probe`, not a bare list. The old accessors returned `[]` for
-"there are none", "Windows refused" and "PowerShell timed out" alike, so a caller could
-not tell a measurement that did not happen from one that did.
-
-Each script body runs inside `_ENVELOPE`, which always writes one JSON object with
-`ok`/`err`/`data`. Without it, `ConvertTo-Json` on an empty array writes nothing at all
-- byte-identical to a script that died before producing output.
+Every query returns a `Probe` carrying a status, so "none found", "refused" and "timed
+out" are different answers. Scripts run inside `_ENVELOPE`, which always writes one
+JSON object: a bare ConvertTo-Json of an empty array writes nothing, like a crash.
 """
 
 from __future__ import annotations
@@ -49,28 +30,16 @@ T = TypeVar("T")
 
 
 class ProbeStatus(enum.Enum):
-    """Why a query did or did not produce an answer.
-
-    These become the reason codes on an UNKNOWN verdict. A missing cmdlet, a refused
-    query and a timeout call for three different responses from the user.
-    """
+    """Why a query did or did not answer; becomes the reason code on an UNKNOWN."""
 
     OK = "OK"
-    # The helper process did not finish inside its timeout. Says nothing about the
-    # control being measured - only that the measurement did not complete.
     TIMEOUT = "TIMEOUT"
-    # Windows refused the query. bruhswer runs unelevated on purpose, so this is an
-    # expected answer for some state, not a malfunction.
+    # Expected for some state: bruhswer runs unelevated on purpose.
     PERMISSION_DENIED = "PERMISSION_DENIED"
-    # The cmdlet does not exist on this edition of Windows. The control may be absent
-    # or may simply be unmeasurable from here; either way bruhswer did not measure it.
+    # The cmdlet does not exist on this edition of Windows.
     UNSUPPORTED = "UNSUPPORTED"
-    # PowerShell itself could not be started.
     LAUNCH_FAILED = "LAUNCH_FAILED"
-    # It ran and wrote something that is not the envelope this module asked for.
     MALFORMED_OUTPUT = "MALFORMED_OUTPUT"
-    # It ran, the envelope parsed, and the script reported an error that is none of the
-    # more specific kinds above.
     PROBE_ERROR = "PROBE_ERROR"
 
     def __str__(self) -> str:
@@ -79,12 +48,7 @@ class ProbeStatus(enum.Enum):
 
 @dataclass(frozen=True)
 class Probe(Generic[T]):
-    """One query's result, with the reason it is what it is.
-
-    `value` is always usable - an empty list or None, never an exception - but it can
-    no longer be mistaken for the whole answer, because reaching it means going through
-    an object that is also carrying the status.
-    """
+    """One query's result and its status. `value` is always usable, never raises."""
 
     value: T
     status: ProbeStatus
@@ -96,19 +60,15 @@ class Probe(Generic[T]):
         return self.status is ProbeStatus.OK
 
     def reason(self) -> str:
-        """Short evidence string naming the status and, when there is one, the cause."""
+        """Short evidence string: the status and, if any, the cause."""
         if self.ok:
             return f"status=OK in {self.duration_ms:.0f}ms"
         return (f"status={self.status} in {self.duration_ms:.0f}ms"
                 + (f" detail={self.detail[:120]}" if self.detail else ""))
 
 
-# --- the envelope ---------------------------------------------------------------
-# Every script body runs inside this. `{body}` is the ONLY substitution, and every
-# body is a constant authored below - never anything derived from input.
-#
-# [Console]::Out.Write rather than Write-Output, so PowerShell's formatter cannot wrap
-# or truncate the JSON on a narrow console.
+# `{body}` is the only substitution, always a constant from this module.
+# [Console]::Out.Write, because Write-Output can wrap the JSON on a narrow console.
 _ENVELOPE = (
     "$ErrorActionPreference='Stop'; "
     "try {{ $d = @( {body} ); "
@@ -118,13 +78,10 @@ _ENVELOPE = (
     "[Console]::Out.Write((ConvertTo-Json -Compress -Depth 6 -InputObject $o))"
 )
 
-# Substrings Windows uses when it refuses a query for want of rights. Matched
-# case-insensitively against the exception message the envelope reports.
 _DENIED_SIGNS = ("access is denied", "unauthorizedaccess", "requires elevation",
                  "requested operation requires elevation", "administrator privilege",
                  "permission denied")
 
-# ...and when the cmdlet is simply not present on this edition of Windows.
 _UNSUPPORTED_SIGNS = ("is not recognized as the name of a cmdlet",
                       "commandnotfoundexception", "is not supported",
                       "not supported on this platform", "no matching",
@@ -141,12 +98,8 @@ def _classify(message: str) -> tuple[ProbeStatus, str]:
 
 
 def _run_probe(name: str, body: str) -> Probe[list[Any]]:
-    """Run one constant script inside the envelope. Never raises.
-
-    Returns the `data` array on success, and an EMPTY list on every failure - with the
-    status saying which failure it was. The empty list is never evidence of anything;
-    that is the entire reason the status travels with it.
-    """
+    """Run one constant script inside the envelope. Never raises. On failure `value`
+    is [] and the status says which failure."""
     script = _ENVELOPE.format(body=body)
     started = time.perf_counter()
     try:
@@ -169,8 +122,7 @@ def _run_probe(name: str, body: str) -> Probe[list[Any]]:
     elapsed = (time.perf_counter() - started) * 1000.0
     raw = (proc.stdout or "").strip()
     if not raw:
-        # The envelope ALWAYS writes an object, so nothing on stdout means the script
-        # never reached its own final line - PowerShell died, or was killed.
+        # The envelope always writes, so no output means PowerShell died.
         stderr = (proc.stderr or "").strip()
         _log.warning("probe %s produced no envelope (rc=%s)", name, proc.returncode)
         return Probe([], ProbeStatus.MALFORMED_OUTPUT, elapsed,
@@ -191,9 +143,7 @@ def _run_probe(name: str, body: str) -> Probe[list[Any]]:
         _log.warning("probe %s failed: %s (%s)", name, status, detail[:120])
         return Probe([], status, elapsed, detail)
 
-    # ConvertTo-Json collapses a one-element array to a bare object, so `data` comes
-    # back as a dict when exactly one row was found. Re-wrap it, or every caller would
-    # need the same special case and one of them would forget.
+    # ConvertTo-Json turns a one-element array into a bare object.
     data = parsed.get("data")
     if data is None:
         data = []
@@ -203,15 +153,10 @@ def _run_probe(name: str, body: str) -> Probe[list[Any]]:
     return Probe(data, ProbeStatus.OK, elapsed)
 
 
-# --- constant script bodies -----------------------------------------------------
-# Each body produces OBJECTS; the envelope does the serialising. `-ErrorAction
-# SilentlyContinue` is kept ONLY where "no rows" is a legitimate answer and the cmdlet
-# throws rather than returning nothing. Everywhere else it is deliberately absent, so
-# that a refusal or a missing cmdlet reaches _classify() instead of being flattened
-# into an empty result that looks like a clean measurement.
+# SilentlyContinue appears ONLY where the cmdlet throws on "no rows" and no rows is a
+# real answer. Elsewhere a refusal must reach _classify(), not look like an empty result.
 
-# NetworkCategory is an enum: ConvertTo-Json serialises it as an integer, which is
-# useless to compare against. Cast every enum to its name inside PowerShell.
+# Enums are cast to their names; ConvertTo-Json would write integers.
 _Q_NETWORK_PROFILE = (
     "Get-NetConnectionProfile | Select-Object Name,InterfaceAlias,"
     "@{n='NetworkCategory';e={[string]$_.NetworkCategory}},"
@@ -223,19 +168,11 @@ _Q_FIREWALL_PROFILES = (
     "Get-NetFirewallProfile | Select-Object Name,@{n='Enabled';e={[bool]$_.Enabled}}"
 )
 
-# SilentlyContinue KEPT: a display group that is not present on this machine is a real
-# answer, reported as Total=0, not a failed measurement.
-# ONE walk of the rule table, not one per group. Each Get-NetFirewallRule call scans all
-# rules (702 here), so three calls cost 3N: measured 2,023 ms cold, against 1,224 ms
-# for a single call naming all three groups.
-#
-# Matched on the Group RESOURCE string, never on DisplayGroup. DisplayGroup is
-# translated, so on a non-English Windows the English names matched no rules at all and
-# every group read "0 of 0 enabled" - PASS, having looked at nothing. The three IDs
-# were read back from FirewallAPI.dll with LoadString, not remembered.
-#
-# InGroup counts every rule in the group, before the Public filter, so "this PC has no
-# such rules" and "none of them apply to Public" are reported as different facts.
+# One rule-table walk for all three groups: one per group cost 3N (2,023 ms cold
+# against 1,224 ms, 702 rules). Matched on the Group resource ID, because DisplayGroup
+# is translated and on non-English Windows matched nothing: "0 of 0 enabled", PASS.
+# The IDs were read back from FirewallAPI.dll. InGroup counts rules before the Public
+# filter, so "no such rules" and "none apply to Public" stay distinct.
 _Q_SHARING_GROUPS = (
     "$groups = [ordered]@{ 'File and Printer Sharing'='@FirewallAPI.dll,-28502'; "
     "'Network Discovery'='@FirewallAPI.dll,-32752'; "
@@ -249,26 +186,20 @@ _Q_SHARING_GROUPS = (
     "Enabled=@($r | Where-Object { $_.Enabled -eq 'True' }).Count } }"
 )
 
-# SilentlyContinue KEPT: Get-NetTCPConnection throws when no connection matches the
-# filter, and "nothing is listening on a wildcard address" is a legitimate finding.
 _Q_LISTENERS = (
     "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
     "Where-Object { $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::' } | "
     "Select-Object LocalPort,OwningProcess"
 )
 
-# SilentlyContinue REMOVED on purpose. A machine with Defender replaced by another AV
-# product has no Get-MpComputerStatus at all, and that must report UNSUPPORTED rather
-# than the same empty answer as a machine whose Defender is off.
+# No SilentlyContinue: with another AV installed this cmdlet is absent (UNSUPPORTED).
 _Q_DEFENDER = (
     "$s = Get-MpComputerStatus; $p = Get-MpPreference; "
     "[pscustomobject]@{ RealTime=[bool]$s.RealTimeProtectionEnabled; "
     "Tamper=[bool]$s.IsTamperProtected; CFA=[int]$p.EnableControlledFolderAccess }"
 )
 
-# SilentlyContinue REMOVED on purpose. Get-SmbServerConfiguration is one of the queries
-# most likely to be refused to an unelevated process, and PERMISSION_DENIED is a
-# materially different report from "SMB is not hardened".
+# No SilentlyContinue: this is often refused unelevated, and that is PERMISSION_DENIED.
 _Q_SMB = (
     "$c = Get-SmbServerConfiguration; "
     "[pscustomobject]@{ SMB1=[bool]$c.EnableSMB1Protocol; "
@@ -282,8 +213,6 @@ _Q_IS_ADMIN = (
     ".IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"
 )
 
-# SilentlyContinue KEPT on Get-Service: 'ABSENT' is produced explicitly below, so a
-# service that does not exist is already a first-class answer rather than a failure.
 _Q_REMOTE_ADMIN = (
     "foreach ($n in @('TermService','WinRM','RemoteRegistry','SSDPSRV',"
     "'upnphost','FDResPub')) { $s = Get-Service -Name $n -ErrorAction SilentlyContinue; "
@@ -292,9 +221,7 @@ _Q_REMOTE_ADMIN = (
     "Status='ABSENT'; StartType='ABSENT' } } }"
 )
 
-# SilentlyContinue REMOVED on both DNS queries. Get-DnsClientDohServerAddress does not
-# exist before Windows 10 2004, and "this Windows cannot tell me" is not the same fact
-# as "no encrypted-DNS servers are configured".
+# No SilentlyContinue: the DoH cmdlet does not exist before Windows 10 2004.
 _Q_DOH = (
     "Get-DnsClientDohServerAddress | "
     "Select-Object ServerAddress,DohTemplate,AutoUpgrade"
@@ -336,7 +263,7 @@ def smb_config() -> Probe[dict[str, Any] | None]:
 
 
 def remote_admin_status() -> Probe[list[dict[str, Any]]]:
-    """Remote-management surfaces (brief SS5). Read-only service state."""
+    """Remote-management service state."""
     return _run_probe("remote_admin_status", _Q_REMOTE_ADMIN)
 
 
@@ -348,15 +275,9 @@ def dns_servers() -> Probe[list[dict[str, Any]]]:
     return _run_probe("dns_servers", _Q_DNS_SERVERS)
 
 
-# --- elevation, measured once ---------------------------------------------------
-# Windows decides elevation at CreateProcess time and no API moves a running process
-# between elevated and unelevated, so this is a property of the process lifetime and
-# re-measuring costs ~250ms per pass for an answer that cannot have changed.
-#
-# ONLY A DEFINITE ANSWER IS CACHED. `controller.privilege` is critical=True, so an
-# UNKNOWN there blocks launch - memoising a None from one startup timeout would brick
-# every launch for the life of the process. A failed measurement is not a fact about
-# the world; the next pass simply asks again.
+# Elevation cannot change during a process's life, so the first DEFINITE answer is
+# cached. A failure is not cached: controller.privilege is critical, and a cached None
+# would block every launch.
 _elevated_cache: Probe[bool | None] | None = None
 
 
@@ -366,11 +287,7 @@ def is_elevated() -> bool | None:
 
 
 def is_elevated_probe() -> Probe[bool | None]:
-    """The measurement with its reason code. Cached once the answer is definite.
-
-    Both `_controller_checks` and `net.tamper` want this, and each was paying its own
-    ~250ms round trip for an answer that cannot change while the process runs.
-    """
+    """Elevation with its reason code, cached once definite."""
     global _elevated_cache
     if _elevated_cache is not None:
         return _elevated_cache
@@ -396,27 +313,15 @@ def _measure_elevation() -> Probe[bool | None]:
 
 
 def reset_elevation_cache() -> None:
-    """Drop the memoised elevation answer. For tests only.
-
-    Present so a test can exercise both branches in one process. Nothing in `app/`
-    calls it, because nothing in `app/` has a reason to: the value it caches cannot
-    change while bruhswer is running.
-    """
+    """Drop the cached elevation answer. For tests only."""
     global _elevated_cache
     _elevated_cache = None
 
 
 def authenticode(exe_path: str) -> Probe[dict[str, Any] | None]:
-    """Authenticode status and signer for one of bruhswer's OWN constant paths.
+    """Authenticode status, subject and issuer of a path from config.EDGE_CANDIDATES.
 
-    This lives here rather than in edge.py so that nothing outside this module has to
-    reach for the probe runner. The rule that there is no public "run this script for
-    me" entry point is the whole point of the module, and a caller poking at the
-    private one quietly erodes it.
-
-    `exe_path` must be a path bruhswer itself resolved (config.EDGE_CANDIDATES), never
-    anything derived from input. The quote check enforces that rather than trusting
-    it: a lone quote would close the PowerShell string literal below.
+    A quote in the path is refused: it would close the PowerShell string literal.
     """
     if "'" in exe_path or "`" in exe_path:
         _log.error("refusing to build a signature query from a quoted path")
@@ -433,15 +338,8 @@ def authenticode(exe_path: str) -> Probe[dict[str, Any] | None]:
 
 
 def bruhswer_rules() -> Probe[list[dict[str, Any]]]:
-    """bruhswer's own firewall rules and the addresses they cover.
-
-    The rule prefix is a bruhswer constant from config, so nothing external reaches
-    this string.
-
-    SilentlyContinue is KEPT here: no rules at all is the normal state before the
-    elevated one-shot has ever been run, and it must report as an empty list rather
-    than as a failed query.
-    """
+    """bruhswer's own firewall rules and their addresses. No rules is a normal answer
+    before the elevated script has run, so SilentlyContinue stays."""
     body = (
         "Get-NetFirewallRule -DisplayName '" + config.RULE_PREFIX + "-*' "
         "-ErrorAction SilentlyContinue | ForEach-Object { "

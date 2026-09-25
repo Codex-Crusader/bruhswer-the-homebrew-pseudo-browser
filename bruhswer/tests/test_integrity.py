@@ -1,18 +1,5 @@
-"""Tests for the self-integrity manifest.
-
-The manifest's job is to notice that bruhswer's own files are not what shipped. The
-tests that matter are the three ways that can happen, and the two ways the check could
-be dishonest:
-
-  detects   a file whose CONTENTS changed
-  detects   a file that is MISSING
-  detects   a file that is PRESENT BUT NOT LISTED  <- the obvious way past a naive check
-  honest    no manifest -> UNKNOWN, never PASS
-  honest    the PASS wording does not claim protection against a targeted attacker
-
-The tamper cases run against a temporary tree rather than the real `app/`, so the suite
-never edits bruhswer's own source to prove a point.
-"""
+"""The file manifest: detects changed, missing and unlisted files; no manifest is
+UNKNOWN; the wording claims no attacker resistance. Tampering uses a temporary tree."""
 
 from __future__ import annotations
 
@@ -102,8 +89,7 @@ class TestManifestDetectsChange(unittest.TestCase):
         self.assertEqual(report.unexpected, ("ui/panels/evil.py",))
 
     def test_a_ui_panel_is_covered_not_just_security_modules(self):
-        """Hashing only 'security-relevant' files would be a green light over a
-        fraction of what runs - every module here is imported into one process."""
+        """Every module runs in one process, so every module is hashed."""
         target = self.tree.root / "ui" / "panels" / "host_panel.py"
         target.write_bytes(b"# tampered\n")
         report = self.tree.check()
@@ -133,15 +119,8 @@ class TestManifestHonesty(unittest.TestCase):
             tree.close()
 
     def test_a_ruined_manifest_is_not_reported_as_an_absent_one(self):
-        """A manifest that is THERE and unusable must not be explained away.
-
-        Both states leave nothing to compare against, so both are UNKNOWN - but the
-        absent case renders as "normal when running from a source checkout", and
-        applying that sentence to a blank, corrupt or non-UTF-8 manifest inside a real
-        install is this project's oldest defect: nothing looked, reported as nothing
-        wrong. The non-UTF-8 case also used to raise UnicodeDecodeError straight out
-        of a function whose docstring promises it never raises.
-        """
+        """A present but unusable manifest is UNKNOWN, never explained as "normal in a
+        source checkout"; non-UTF-8 once raised."""
         cases = (
             ("empty", b""),
             ("unparseable", b"garbage\n"),
@@ -168,7 +147,7 @@ class TestManifestHonesty(unittest.TestCase):
             tree.close()
 
     def test_a_ruined_manifest_reaches_the_user_as_unreadable(self):
-        """Read through verify(), the way the panel does, not off the report."""
+        """Through verify(), as the panel reads it."""
         tree = _Tree()
         try:
             tree.manifest.write_bytes(b"\xff\xfe\x00\x80")
@@ -184,23 +163,17 @@ class TestManifestHonesty(unittest.TestCase):
         self.assertNotIn("source checkout", checks[0].detail)
 
     def test_check_is_not_critical_so_it_cannot_block_launch(self):
-        """A damaged install is worth reporting, not worth refusing to run over -
-        and a targeted attacker would have regenerated the manifest anyway."""
+        """Worth reporting, not blocking: an attacker would regenerate the manifest."""
         for check in integrity.verify():
             self.assertFalse(check.critical)
             self.assertFalse(check.blocks_launch)
 
     def test_pass_wording_does_not_overclaim(self):
-        """The PASS text must not imply protection against someone who can also edit
-        the manifest. That is the ceiling of any self-check with no external anchor."""
+        """The PASS text implies no protection from someone who can edit the manifest."""
         checks = integrity.verify()
         self.assertEqual(len(checks), 1)
         check = checks[0]
 
-        # The TITLE must stay narrow whatever the verdict. "self-integrity", "tamper
-        # proof" and friends promise attacker resistance that no self-check can have
-        # when the manifest and the checker live in the same writable directory - and
-        # titles are what people actually read.
         for forbidden in ("tamper", "integrity protect", "trusted", "secure"):
             self.assertNotIn(forbidden, check.title.lower(),
                              f"title claims more than it measures: {check.title!r}")
@@ -218,13 +191,8 @@ class TestManifestHonesty(unittest.TestCase):
         self.assertEqual(parsed, {"real/path.py": "abc123"})
 
     def test_line_endings_do_not_change_the_hash(self):
-        """The bug that would have made every fresh clone report FAIL.
-
-        core.autocrlf is true in this repo and there is no .gitattributes, so git
-        stores LF and checks CRLF out. A manifest built on one working copy would then
-        mismatch the bytes a fresh clone produces, and a check that cries wolf on every
-        clean install is worse than no check - it teaches the user to ignore it.
-        """
+        """A CRLF checkout of LF-stored files must hash the same, or every fresh clone
+        reports FAIL."""
         tree = _Tree()
         try:
             target = tree.root / "verdict.py"
@@ -239,7 +207,7 @@ class TestManifestHonesty(unittest.TestCase):
             tree.close()
 
     def test_a_chunk_boundary_between_cr_and_lf_is_handled(self):
-        """The normalisation reads in chunks, so a CRLF pair can straddle a boundary."""
+        """A CRLF pair can straddle a read chunk."""
         tree = _Tree()
         try:
             target = tree.root / "big.py"
@@ -266,8 +234,7 @@ class TestManifestHonesty(unittest.TestCase):
             tree.close()
 
     def test_manifest_format_is_deterministic(self):
-        """Two runs must produce byte-identical output, or every release diff is noise
-        and a real change hides in it."""
+        """Two runs produce byte-identical output."""
         tree = _Tree()
         try:
             first = integrity.format_manifest(integrity.build_manifest(tree.root))

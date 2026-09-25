@@ -1,16 +1,5 @@
-"""The security state has to be readable, or the verdict never arrives.
-
-bruhswer's entire output is a row of coloured dots. Two ways that fails a real user:
-
-  1. COLOUR ALONE. Red-green colour blindness makes PASS and FAIL the same dot.
-  2. CONTRAST. An amber dot on a dark grey panel can be below the threshold at which
-     it is legible at all, and Windows high-contrast mode exists for users for whom
-     that is routine.
-
-Both are measured here rather than asserted in a comment. The contrast ratios are
-computed with the WCAG 2.1 relative-luminance formula, so "clears AA" is a number this
-suite produced, not a claim somebody typed.
-"""
+"""The status dots must be readable: never colour alone, and contrast COMPUTED with the
+WCAG 2.1 formula, not asserted."""
 
 from __future__ import annotations
 
@@ -26,9 +15,7 @@ from app import config  # noqa: E402
 from app.ui.panels import chrome  # noqa: E402
 from app.verdict import Verdict  # noqa: E402
 
-# WCAG 2.1: 4.5:1 for normal text, 3:1 for large text and non-text UI components.
-# The status dots are non-text indicators, so 3:1 is the applicable bar; the labels
-# beside them are text and take 4.5:1.
+# WCAG 2.1: 4.5:1 for text (the labels), 3:1 for non-text UI (the dots).
 AA_NON_TEXT = 3.0
 AA_TEXT = 4.5
 
@@ -98,7 +85,7 @@ class TestHighContrastPaletteIsActuallyReadable(unittest.TestCase):
                     f"{name} is {ratio:.2f}:1 on the background; below {AA_TEXT}:1")
 
     def test_the_verdict_colours_are_distinguishable_from_each_other(self):
-        """Not just visible against the background - visible against each OTHER."""
+        """Distinguishable from each other, not only from the background."""
         pairs = [("OK_GREEN", "WARN_AMBER"), ("OK_GREEN", "BAD_RED"),
                  ("WARN_AMBER", "BAD_RED")]
         for first, second in pairs:
@@ -126,7 +113,6 @@ class TestHighContrastPaletteIsActuallyReadable(unittest.TestCase):
                              self.PALETTE["OK_GREEN"])
             self.assertEqual(fresh.POLICY_STATE_UNKNOWN_COLOUR,
                              self.PALETTE["BAD_RED"])
-            # Every state the network layer can return still has a colour.
             from app.network import network_guard
             for state in network_guard.PolicyState:
                 with self.subTest(state=state):
@@ -136,12 +122,8 @@ class TestHighContrastPaletteIsActuallyReadable(unittest.TestCase):
 
 
 class TestLightPaletteIsActuallyReadable(unittest.TestCase):
-    """bruhswer is dark by default; this is what it uses on a light-mode machine.
-
-    The verdict hues had to be DARKENED rather than reused: the dark theme's #3FB950
-    green is about 1.9:1 on a light panel, which would have made the status lights -
-    the entire product - unreadable for the users this switch is meant to serve.
-    """
+    """The light-mode palette. Its verdict hues are darker: the dark theme's green is
+    about 1.9:1 on a light panel."""
 
     PALETTE = config._LIGHT  # noqa: SLF001  # lint: allow protected-access - the palette under test
 
@@ -169,7 +151,7 @@ class TestLightPaletteIsActuallyReadable(unittest.TestCase):
                            "the 'light' palette is not lighter than the default")
 
     def test_reusing_the_dark_verdict_colours_would_have_failed(self):
-        """Pins WHY the hues were changed, so nobody 'simplifies' them back."""
+        """Pins why the hues were changed."""
         ratio = contrast(config.OK_GREEN, self.PALETTE["BG_PANEL"])
         self.assertLess(ratio, AA_NON_TEXT,
                         "the dark green now clears AA on the light panel; this test "
@@ -204,7 +186,7 @@ class TestTheDefaultPaletteIsHonestAboutItself(unittest.TestCase):
                                    f"{name} is invisible on the panel background")
 
     def test_high_contrast_detection_never_guesses(self):
-        """None on failure, not False - a guess would silently deny the user the theme."""
+        """None on failure, never a guessed False."""
         from app.browser import embed
 
         result = embed.high_contrast()

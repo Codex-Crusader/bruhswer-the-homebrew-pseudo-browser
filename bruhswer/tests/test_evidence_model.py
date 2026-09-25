@@ -1,16 +1,8 @@
-"""The evidence model is only worth having if it cannot rot.
+"""Keeps the evidence model honest:
 
-A check declares HOW it knows what it claims. `EvidenceKind` defaults to INFERENCE so
-that forgetting to declare one understates rather than overstates - but a silent
-understatement is still a wrong label, and nothing stops a new check from claiming LIVE
-for a preference read. These tests are what stops it.
-
-    1. every check the verifier emits is in the frozen table below, with the kind the
-       table says. A new check_id fails here until somebody decides what it knows.
-    2. every UNKNOWN carries a reason code. "UNKNOWN" with no reason is the bare
-       indicator this project treats as a defect.
-    3. ProbeStatus and UnknownReason stay in step, so reason_for_probe() cannot
-       silently collapse a new status into PROBE_ERROR.
+    1. every emitted check is in the frozen table below, with the kind it allows
+    2. every UNKNOWN carries a reason code
+    3. ProbeStatus and UnknownReason stay in step
 """
 
 from __future__ import annotations
@@ -34,13 +26,7 @@ READ = EvidenceKind.READ_BACK
 HIST = EvidenceKind.HISTORICAL
 INFER = EvidenceKind.INFERENCE
 
-# check_id -> the evidence it is allowed to claim.
-#
-# LIVE means bruhswer observed the property it names during the pass. READ_BACK means it
-# read a setting and the enforcement was not observed. HISTORICAL means a Stage 4 result
-# that nothing re-runs. INFERENCE means it was reasoned out.
-#
-# Changing an entry here is changing a security claim. Do it deliberately.
+# check_id -> the evidence it may claim. Changing an entry changes a security claim.
 EXPECTED: dict[str, EvidenceKind] = {
     "edge.present": LIVE,
     "edge.signature": LIVE,
@@ -106,10 +92,8 @@ class TestEveryCheckDeclaresItsEvidence(unittest.TestCase):
         self.assertEqual(crashed, [], f"guards raised: {crashed}")
 
     def test_every_guard_reports_under_its_declared_category(self):
-        """verify_all declares a category per guard, and a crash check is named in it,
-        so the status row that shows the guard's checks shows its crash too. That only
-        holds if every check the guard REALLY emits carries the same category. Checks
-        are appended in guard order, so the timings slice them back per guard."""
+        """Every real check carries its guard's declared category. Checks are in guard
+        order, so the timings slice them per guard."""
         start = 0
         for timing in self.result.timings:
             produced = self.result.checks[start:start + timing.checks]
@@ -130,7 +114,7 @@ class TestEveryCheckDeclaresItsEvidence(unittest.TestCase):
         for check in self.result.checks:
             expected = EXPECTED.get(check.check_id)
             if expected is None:
-                continue        # reported by the test above
+                continue
             with self.subTest(check_id=check.check_id):
                 self.assertIs(
                     check.evidence_kind, expected,
@@ -168,9 +152,7 @@ class TestEvidenceKindIsNotDecoration(unittest.TestCase):
     def setUpClass(cls):
         cls.result = _live_result()
 
-    # Phrases that assert an OBSERVED behaviour. A check that only read a setting back
-    # must not use them: "downloads go to quarantine" is a claim about what happens to a
-    # file, and reading two keys out of JSON does not establish it.
+    # Phrases that claim observed behaviour, which a READ_BACK check must not use.
     BEHAVIOURAL = ("will not ask", "cannot reach", "are directed to", "go to quarantine",
                    "is blocked from", "packets are")
 
@@ -234,11 +216,7 @@ class TestProbeStatusAndUnknownReasonStayInStep(unittest.TestCase):
 
 
 class TestElevationCacheCannotBrickLaunch(unittest.TestCase):
-    """controller.privilege is critical=True, so UNKNOWN blocks launch.
-
-    Memoising a failed measurement would therefore block EVERY launch for the rest of
-    the process's life, recoverable only by restarting bruhswer.
-    """
+    """A cached failure would block every launch until restart."""
 
     def setUp(self):
         sysquery.reset_elevation_cache()
@@ -314,15 +292,10 @@ class TestProbeFailuresAreNotFindings(unittest.TestCase):
                 self.assertIs(check.verdict, Verdict.UNKNOWN)
                 self.assertIs(check.unknown_reason, UnknownReason.TIMEOUT)
                 self.assertNotIn("not present", check.detail.lower())
-                # Fail-closed is preserved: critical + UNKNOWN still blocks launch.
                 self.assertTrue(check.blocks_launch)
 
     def test_a_failed_sharing_query_keeps_the_same_check_ids(self):
-        """A check_id that vanishes is a PASS that silently leaves the lights.
-
-        find_regressions only iterates the checks it can see, so a disappearing id is
-        invisible to it - the light goes out with nothing reported.
-        """
+        """A vanished check_id would leave the lights without a regression report."""
         from app.host import host_guard
 
         ok_ids = {c.check_id for c in host_guard.evaluate()

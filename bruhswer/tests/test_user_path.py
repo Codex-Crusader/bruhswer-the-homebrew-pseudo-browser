@@ -6,15 +6,8 @@
 
 Requires the network policy to be applied.
 
-The download step is the reason this file exists. bruhswer used to pass
-`--download-directory=<quarantine>` to Edge. That is not a real Chromium switch: it was
-ignored and downloads went to the user's REAL Downloads folder, while every existing
-test still passed because none of them had ever downloaded anything. This test performs
-an actual download with the actual browser and checks where the file lands - and it
-watches the user's real Downloads folder to make sure nothing appears there.
-
-Nothing here uses real credentials or real user files. The downloaded payload is a
-synthetic byte string served from loopback.
+The download step matters most: a real download must land in quarantine and never in
+the real Downloads folder, as it once did. The payload is synthetic, from loopback.
 """
 
 from __future__ import annotations
@@ -38,13 +31,9 @@ from app.privacy import privacy_guard  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
 
 PORT = 18170
-# Discovered at run time - see tests/_env.py. Hardcoding one machine's
-# gateway made this suite pass while probing an address that did not exist.
+# Discovered at run time; a hardcoded gateway once probed an address that did not exist.
 ROUTER = _env.require_gateway()
-# .txt, not .bin: Edge's own download protection holds an unrecognised binary as
-# "Unconfirmed ....crdownload" awaiting user confirmation. That is Edge working
-# correctly, but it makes a poor test fixture. The point being tested is WHERE the
-# file goes, not whether Edge trusts it.
+# .txt: Edge holds an unknown binary for confirmation, and the test is where it lands.
 DL_NAME = "bruh_user_path_probe.txt"
 DL_BODY = b"BRUHSWER_SYNTHETIC_DOWNLOAD_NOT_A_REAL_FILE"
 MARKER = "BRUHSWER_USERPATH_PAGE"
@@ -91,14 +80,11 @@ class _H(http.server.BaseHTTPRequestHandler):
         pass
 
     def handle_error(self, request, client_address):
-        # Chromium resets connections routinely when it aborts a fetch. That is normal
-        # and must not spray tracebacks over the test output.
         pass
 
 
 def edge_probe(url: str, udd: Path) -> str:
-    """Headless probe in a throwaway profile. Same executable, so the same firewall
-    rules apply - that is the point."""
+    """Headless probe in a throwaway profile, with the same msedge.exe."""
     argv = [str(config.find_edge()), "--headless=new", "--disable-gpu",
             f"--user-data-dir={udd}", "--no-first-run",
             "--no-default-browser-check", "--dump-dom", url]
@@ -118,15 +104,8 @@ def edge_probe(url: str, udd: Path) -> str:
 
 
 def quiesce_bruhswer_edge(timeout: int = 30) -> int:
-    """Wait for (then stop) any Edge still using a bruhswer profile.
-
-    Running this suite straight after another one produced ONE flaky failure: a
-    previous suite's Edge was still shutting down, the new session attached to it or
-    started slowly, and the download had not begun before the poll window expired.
-    That is a test-harness race, not a product fault - but a security regression suite
-    that fails at random teaches people to ignore it, which is worse than having no
-    suite. So the race is removed rather than tolerated.
-    """
+    """Wait for, then stop, any Edge still using a bruhswer profile; a previous suite's
+    Edge still exiting made this suite flaky."""
     ps = (f"@(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
           f"Where-Object {{ $_.CommandLine -like '*{config.ROOT.name}*' }}).Count")
     deadline = time.time() + timeout
@@ -177,8 +156,7 @@ def main() -> int:
     controller = ctrl.Controller()
     probe_dir = config.PROFILE_DISPOSABLE_ROOT / "userpathprobe"
 
-    # The persistent session reuses one quarantine folder, so a file left by an earlier
-    # run would be mistaken for this run's download. Start from empty and say so.
+    # Start from an empty persistent quarantine.
     persistent_q = quarantine.quarantine_dir_for("persistent000000")
     stale = [p.name for p in persistent_q.rglob("*") if p.is_file()]
     if stale:
@@ -203,9 +181,6 @@ def main() -> int:
     if not outcome.launched:
         return 1
     session = outcome.session
-    # Narrowed explicitly. A launched outcome always carries a session, and
-    # stating that lets the accesses below read as Session rather than
-    # Session | None.
     assert session is not None, "launch reported success without a session"
 
     qdir = quarantine.quarantine_dir_for(session.session_id)
@@ -218,7 +193,6 @@ def main() -> int:
           dl_check is not None and dl_check.verdict.value == "PASS",
           dl_check.detail if dl_check else "check missing")
 
-    # Poll rather than guess.
     landed: list[str] = []
     for _ in range(20):
         time.sleep(2)
@@ -226,17 +200,8 @@ def main() -> int:
         if landed:
             break
 
-    # WHAT IS ACTUALLY BEING CLAIMED, and therefore what is tested:
-    #
-    #   "Downloads are directed into quarantine and never into the user's real
-    #    Downloads folder."
-    #
-    # NOT "Edge finishes every transfer". Measured behaviour: the file arrives in
-    # quarantine under the right name but stays as `.crdownload`, because Edge's own
-    # SmartScreen holds an unverified download until the user chooses Keep. bruhswer
-    # deliberately does NOT disable Safe Browsing (brief SS38), so that hold is a
-    # security feature doing its job - and the file is sitting in quarantine, unrun,
-    # which is exactly where bruhswer wants it.
+    # The claim is WHERE downloads go, not that Edge finishes them: SmartScreen may
+    # hold the file as .crdownload in quarantine, which is fine.
     arrived = [n for n in landed if DL_NAME in n]
     check("download was redirected INTO quarantine", bool(arrived),
           f"quarantine holds: {landed or '<nothing>'}")
@@ -273,7 +238,6 @@ def main() -> int:
     probe_dir.mkdir(parents=True, exist_ok=True)
     lan = edge_probe(f"http://{ROUTER}/", probe_dir)
     check("LAN / router is BLOCKED", lan == "BLOCKED", lan)
-    # /plain, so the probe is not derailed by the auto-download on the main page.
     local = edge_probe(f"http://127.0.0.1:{PORT}/plain", probe_dir)
     check("localhost is REACHABLE (known limitation, honestly reported)",
           local == "REACHED", f"{local} - reported as NOT ENFORCEABLE in the UI")

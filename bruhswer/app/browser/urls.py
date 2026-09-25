@@ -1,10 +1,5 @@
-"""Turn address-bar text into a URL bruhswer is willing to hand the browser.
-
-Address-bar text is user input and is still untrusted: it becomes an argv element on a
-browser process, so anything not clearly an http(s) URL or a search is refused rather
-than guessed at. Refused by construction: file:, javascript:, data:, vbscript:, about:
-(except the one literal bruhswer uses), UNC paths, drive letters, control characters.
-"""
+"""Turn address-bar text into an http(s) URL or a search, or refuse it. file:,
+javascript:, data:, UNC paths, drive letters and control characters are refused."""
 
 from __future__ import annotations
 
@@ -17,20 +12,9 @@ BLANK = "about:blank"
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
-# Invisible or text-reordering characters: they change what an address LOOKS like
-# without changing what it RESOLVES to, which is the whole mechanism of a spoof. Only
-# the explicit-scheme branch needed this - the search branch percent-encodes them.
-#
-#   U+00AD soft hyphen           U+061C Arabic letter mark
-#   U+200B-U+200D zero-width     U+200E, U+200F LTR/RTL marks
-#   U+202A-U+202E embed/override U+2028, U+2029 line/paragraph separator
-#   U+2066-U+2069 isolates       U+FEFF BOM
-#
-# Escaped, not pasted: the real characters would be unreviewable in this source.
-#
-# Does NOT detect homoglyphs. A Cyrillic 'a' is an ordinary visible letter and passes.
-# Refusing every non-ASCII host would break internationalised domains, and a partial
-# homoglyph table would be a false claim of protection.
+# Invisible and text-reordering characters (soft hyphen, zero-width, bidi marks and
+# overrides, isolates, BOM) change how an address looks, not where it goes. Homoglyphs
+# are NOT detected: a partial table would be a false claim.
 _DECEPTIVE = re.compile(
     "[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069\ufeff]")
 _LOOKS_LIKE_HOST = re.compile(
@@ -56,9 +40,7 @@ def normalise(text: str) -> str:
         raise RefusedURL("nothing entered")
     if _CONTROL.search(raw):
         raise RefusedURL("control characters are not allowed in an address")
-    # Before the scheme branches, so it covers the http(s) path that returns `raw`
-    # unchanged. Refused, not stripped: silently removing a character changes where
-    # the user goes without telling them.
+    # Refused, not stripped: stripping changes the destination silently.
     if _DECEPTIVE.search(raw):
         raise RefusedURL(
             "that address contains invisible or text-reversing characters, which are "
@@ -76,8 +58,7 @@ def normalise(text: str) -> str:
         raise RefusedURL("that looks like a file path, not a web address")
 
     if lowered.startswith(("http://", "https://")):
-        # urlparse raises ValueError on some inputs - an IPv6 literal with a zone id
-        # is the easy one. Uncaught it reaches Tk; everything here is a refusal.
+        # urlparse raises ValueError on some inputs, e.g. an IPv6 zone id.
         try:
             parsed = urlparse(raw)
             netloc = parsed.netloc
@@ -85,8 +66,7 @@ def normalise(text: str) -> str:
             raise RefusedURL("that address could not be parsed as a web address") from exc
         if not netloc:
             raise RefusedURL("that address has no site name")
-        # "https://www.paypal.com@evil.example/login" is a valid URL whose SITE is
-        # evil.example, and the part read first is decorative.
+        # "https://www.paypal.com@evil.example/" goes to evil.example.
         if "@" in netloc:
             raise RefusedURL(
                 "that address hides the real site name behind a '@'. The site it "

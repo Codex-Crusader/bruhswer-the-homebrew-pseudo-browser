@@ -1,22 +1,14 @@
-"""Host a real Edge window inside the bruhswer window, using documented Win32 calls.
+"""Host a real Edge window inside the bruhswer window with `SetParent`.
 
-`SetParent` window reparenting. Edge keeps its own process tree, Chromium sandbox,
-renderer processes and profile; the only thing that changes is which window is its
-parent. No DLL injection, no modification of Edge binaries, no disabling of the
-sandbox, SmartScreen, Safe Browsing or TLS validation, no undocumented API.
+Edge keeps its own processes, sandbox and profile; only its parent window changes. No
+injection, no patched binaries, no undocumented API.
 
-Rejected alternatives: CEF Python bundles its own unsigned Chromium build, a new
-third-party binary in the trusted stack. WebView2 is Microsoft-signed and installed,
-but driving it from Python needs pythonnet plus .NET interop - kept as a documented
-fallback, not adopted, since reparenting works with zero new dependencies. The DevTools
-protocol needs `--remote-debugging-port`, already in DANGEROUS_FLAGS: a compromised
-browser can reach localhost and nothing can block it, so a localhost control channel
-into the browser is the one thing that must not exist.
+Rejected: CEF (an unsigned Chromium build in the trusted stack), WebView2 (needs
+pythonnet), and DevTools (needs --remote-debugging-port, a localhost control channel a
+compromised browser could reach).
 
-Honest limitation: this is window hosting, not in-process embedding. Edge draws its own
-tab strip and toolbar inside the hosted window, so tabs, back/forward and reload are
-Edge's real controls. bruhswer supplies the frame, address bar, security chrome and
-session lifecycle around them.
+Limitation: this is window hosting, not embedding. Tabs, back/forward and reload are
+Edge's own controls.
 """
 
 from __future__ import annotations
@@ -73,9 +65,8 @@ USER32.IsWindow.argtypes = [wt.HWND]
 USER32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
 USER32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int,
                                 ctypes.c_int, ctypes.c_int, ctypes.c_uint]
-# The rest of the prototypes. Declaring every one is not bookkeeping: an undeclared
-# function defaults to c_int returns and unchecked arguments, which is exactly how the
-# SetWindowLongW sign-overflow bug hid until it hit a window with bit 31 set.
+# Every prototype is declared: an undeclared one defaults to c_int, which is how the
+# SetWindowLongW sign-overflow bug hid.
 USER32.EnumWindows.argtypes = [ctypes.c_void_p, wt.LPARAM]
 USER32.EnumWindows.restype = wt.BOOL
 USER32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
@@ -109,21 +100,15 @@ _U32 = 0xFFFFFFFF
 
 
 def _to_signed32(value: int) -> int:
-    """Window styles are 32-bit flags, but SetWindowLongW takes a SIGNED long.
-
-    GetWindowLongW returns a signed value, so a style with bit 31 set (WS_POPUP) comes
-    back NEGATIVE, Python's bitwise operators sign-extend it infinitely, and ctypes
-    raises "int too long to convert". An early spike happened to meet only windows with
-    bit 31 clear; masking to 32 bits removes the luck.
-    """
+    """SetWindowLongW takes a SIGNED long; a style with bit 31 set (WS_POPUP) otherwise
+    raises "int too long to convert"."""
     value &= _U32
     return value - 0x100000000 if value >= 0x80000000 else value
 
 
 _WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
-# CONSTANT script. The only substituted value is a profile directory name that bruhswer
-# generated itself (a hex session id or a fixed literal), never anything external.
+# The only substituted value is a profile folder name bruhswer generated.
 _PS_PIDS = (
     "@(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
     "Where-Object {{ $_.CommandLine -like '*{marker}*' }} | "
@@ -132,8 +117,7 @@ _PS_PIDS = (
 
 
 def edge_pids_for_profile(profile_dir: Path) -> set[int]:
-    """PIDs of Edge processes using this profile. Attribution by profile directory
-    name, so the user's own browser is never matched."""
+    """PIDs of Edge processes using this profile, matched by profile folder name."""
     marker = profile_dir.name
     if not marker.replace("_", "").replace("-", "").isalnum():
         _log.error("refusing to match processes on a non-alphanumeric marker")
@@ -150,8 +134,6 @@ def edge_pids_for_profile(profile_dir: Path) -> set[int]:
     return {int(x) for x in raw.split(",") if x.strip().isdigit()}
 
 
-# Renderer processes carry --type=renderer on their command line. Matching on the
-# profile marker AND the type keeps this to this session's page processes only.
 _PS_RENDERERS = (
     "@(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
     "Where-Object {{ $_.CommandLine -like '*{marker}*' -and "
@@ -161,12 +143,7 @@ _PS_RENDERERS = (
 
 
 def renderer_pids_for_profile(profile_dir: Path) -> list[int] | None:
-    """PIDs of this session's renderer processes - the ones that run web content.
-
-    An empty list means "asked, and there are none". None means "could not ask". A
-    bare [] used to cover both, so one PowerShell hiccup during a live session produced
-    a sandbox check reading "No browser session is running" with the browser on screen.
-    """
+    """PIDs of this session's renderers. [] = asked, none found; None = could not ask."""
     marker = profile_dir.name
     if not marker.replace("_", "").replace("-", "").isalnum():
         return None
@@ -184,22 +161,11 @@ def renderer_pids_for_profile(profile_dir: Path) -> list[int] | None:
     return [int(x) for x in raw.split(",") if x.strip().isdigit()]
 
 
-# --- attributed process identity, for the panic path ----------------------------
-#
-# Separate from edge_pids_for_profile() because the panic key TERMINATES processes,
-# which raises attribution from "good enough to count" to "good enough to kill".
-#
-#   1. That query matches `-like '*<marker>*'` on the profile DIRECTORY NAME. For the
-#      persistent session that name is the literal "persistent", which would match an
-#      unrelated Edge process whose command line contained the word.
-#   2. A PID can be RECYCLED between being listed and OpenProcess. Checking the image
-#      name rules out a recycled PID that became notepad.exe, but not one that became
-#      another msedge.exe - the user's own browser, the one thing never to kill.
-#
-# So this returns the full command line and the creation time as a FILETIME; matching
-# happens in Python against the absolute --user-data-dir (which also avoids escaping a
-# Windows path into a PowerShell wildcard, where [ and ] are metacharacters), and the
-# creation time is re-read from the OPENED HANDLE before anything is terminated.
+# For the panic key, which KILLS processes, so attribution must be exact: the folder
+# name match above would hit any Edge whose command line contains "persistent", and a
+# PID can be recycled into another msedge.exe. So this returns the full command line
+# (matched in Python on the absolute --user-data-dir) and the creation FILETIME, which
+# is re-read from the opened handle before terminating.
 _PS_EDGE_DETAIL = (
     "@(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
     "ForEach-Object { [pscustomobject]@{ Pid=$_.ProcessId; "
@@ -217,22 +183,12 @@ class EdgeProcess:
 
 
 def _normalise_cmdline(text: str) -> str:
-    """Lowered, with quotes removed, so a quoted and unquoted path compare equal.
-
-    subprocess quotes an argument only when it contains a space, so the same profile
-    appears as --user-data-dir=C:\\x on one machine and --user-data-dir="C:\\a b\\x" on
-    another. Both must match.
-    """
+    """Lowered and unquoted: subprocess quotes a path only when it has a space."""
     return text.replace('"', "").lower()
 
 
 def attributed_edge_processes(profile_dir: Path) -> list[EdgeProcess] | None:
-    """Edge processes provably belonging to THIS profile. None if the query failed.
-
-    None and [] are different answers, for the same reason as
-    renderer_pids_for_profile: "could not ask" must never be reported as "there are
-    none", least of all on a path that then tells the user everything was stopped.
-    """
+    """Edge processes provably belonging to THIS profile. None if the query failed."""
     try:
         proc = subprocess.run(
             [str(config.POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",
@@ -256,8 +212,7 @@ def attributed_edge_processes(profile_dir: Path) -> list[EdgeProcess] | None:
     if not isinstance(entries, list):
         return None
 
-    # The exact flag bruhswer itself builds in edge.build_command. Anything that does
-    # not carry this precise absolute path is not ours and is not a target.
+    # The exact flag edge.build_command writes.
     needle = _normalise_cmdline(f"--user-data-dir={profile_dir}")
 
     out: list[EdgeProcess] = []
@@ -283,11 +238,8 @@ def attributed_edge_processes(profile_dir: Path) -> list[EdgeProcess] | None:
 
 PROCESS_TERMINATE = 0x0001
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-# REQUIRED for WaitForSingleObject on a process handle, and easy to omit because
-# terminating works perfectly well without it. MEASURED: without SYNCHRONIZE the wait
-# fails immediately instead of blocking, so `confirmed_exited` came back 0 every time
-# and the panic report permanently understated what it had achieved - claiming less
-# than the truth, which is the safe direction to be wrong but still wrong.
+# Needed by WaitForSingleObject. Measured: without it the wait fails at once and
+# confirmed_exited was always 0.
 PROCESS_SYNCHRONIZE = 0x00100000
 _INVALID_HANDLE = wt.HANDLE(-1).value
 _WAIT_OBJECT_0 = 0x0
@@ -309,12 +261,8 @@ KERNEL32.WaitForSingleObject.restype = wt.DWORD
 
 @dataclass(frozen=True)
 class TerminationReport:
-    """What the panic path ACTUALLY did. Every field is reported to the user.
-
-    `refused` is the important one: it counts processes bruhswer declined to touch
-    because their identity no longer matched. Reporting only `terminated` would let a
-    refusal read as a success.
-    """
+    """What the panic path did. `refused` counts processes whose identity no longer
+    matched, so a refusal cannot read as a success."""
 
     terminated: int = 0
     already_gone: int = 0
@@ -340,37 +288,20 @@ def _creation_filetime(handle) -> int | None:
 
 
 def same_process_instance(enumerated: int, from_handle: int) -> bool:
-    """Do these two creation times describe the SAME process instance?
+    """Same process instance? Compared at microseconds, not with `==`.
 
-    NOT `==`, and that is not a loosening. The two values come from different APIs at
-    different precision - GetProcessTimes gives full 100ns resolution, CIM
-    CreationDate truncates to MICROSECONDS (measured difference: 8 ticks) - so exact
-    equality essentially never holds, and the panic key refused every process it was
-    asked to stop: "0 terminated; 9 left alone" with nine live Edge processes running.
-    The unit test read BOTH sides with GetProcessTimes, so it was self-consistent and
-    proved nothing about the path that runs.
-
-    Microsecond resolution is exact at the precision the coarser source carries. Two
-    processes sharing a PID AND created inside the same microsecond is not a realistic
-    collision, so the guard still refuses a recycled PID, including one recycled into
-    another msedge.exe.
+    GetProcessTimes has 100ns resolution; CIM CreationDate is truncated to microseconds
+    (measured difference: 8 ticks). With `==` the panic key refused every process.
     """
     return enumerated // 10 == from_handle // 10
 
 
 def terminate_attributed(processes: list[EdgeProcess]) -> TerminationReport:
-    """Immediately terminate processes whose identity still checks out.
+    """Terminate processes whose creation time, read from the opened handle, still
+    matches. Anything not positively identified is refused.
 
-    The identity re-check is the point. Windows may have recycled a PID since
-    enumeration, and because the recycled PID could belong to another msedge.exe,
-    checking the image name would not catch it. The creation FILETIME read from the
-    OPENED HANDLE identifies the process INSTANCE, and a mismatch is refused.
-
-    Fails closed throughout: anything not positively identified is left alone and
-    counted in `refused`.
-
-    TerminateProcess is ASYNCHRONOUS, so `confirmed_exited` counts only handles
-    actually observed to have exited. The caller must not describe the rest as stopped.
+    TerminateProcess is asynchronous: `confirmed_exited` counts only processes seen to
+    exit.
     """
     terminated = already_gone = refused = failed = confirmed = 0
 
@@ -379,7 +310,6 @@ def terminate_attributed(processes: list[EdgeProcess]) -> TerminationReport:
             PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
             | PROCESS_SYNCHRONIZE, False, entry.pid)
         if not handle or handle == _INVALID_HANDLE:
-            # Gone already, or not ours to open. Either way, nothing to do.
             already_gone += 1
             continue
         try:
@@ -453,7 +383,6 @@ def host_window(hwnd: int, parent_hwnd: int) -> bool:
         _log.error("window hosting failed: %s", exc.__class__.__name__)
         return False
 
-    # Verify rather than assume - the project's standing rule.
     actual = USER32.GetParent(hwnd)
     ok = bool(actual) and int(actual) == int(parent_hwnd)
     _log.info("window hosting %s", "verified" if ok else "FAILED")
@@ -461,12 +390,8 @@ def host_window(hwnd: int, parent_hwnd: int) -> bool:
 
 
 def fit(hwnd: int, width: int, height: int) -> None:
-    """Size the hosted window to the frame, and make sure it actually repaints.
-
-    SetWindowPos alone was not enough: Chromium composites its own surface and would
-    show a stale or blank area until something forced a paint. RedrawWindow with
-    INVALIDATE|ERASE|ALLCHILDREN|UPDATENOW pushes the repaint through immediately.
-    """
+    """Size the hosted window and force a repaint; SetWindowPos alone left Chromium's
+    surface stale."""
     if not (hwnd and USER32.IsWindow(hwnd) and width > 0 and height > 0):
         return
     USER32.SetWindowPos(wt.HWND(hwnd), wt.HWND(0), 0, 0, width, height,
@@ -477,12 +402,9 @@ def fit(hwnd: int, width: int, height: int) -> None:
 
 
 def work_area() -> tuple[int, int, int, int]:
-    """The desktop area excluding the taskbar, as (left, top, width, height).
+    """Desktop area without the taskbar, as (left, top, width, height).
 
-    Tk only exposes the full screen size, so a window sized from winfo_screenheight
-    runs underneath the taskbar. bruhswer's status lights are the bottom 43px of the
-    window, so that is exactly the strip that disappears. Falls back to the full
-    screen if the query fails, which is the pre-existing behaviour.
+    Tk only knows the full screen, which put the status lights under the taskbar.
     """
     rect = wt.RECT()
     try:
@@ -495,15 +417,12 @@ def work_area() -> tuple[int, int, int, int]:
 
 
 def enable_dpi_awareness() -> str:
-    """Make this process DPI-aware BEFORE any window exists.
+    """Make this process DPI-aware. Must run before the first window exists.
 
-    Tk is DPI-unaware by default and Edge is per-monitor aware; the mismatch makes
-    Windows virtualise coordinates for the parent but not the child, so the page
-    renders at the wrong scale or gets clipped. Must run before the first window
-    exists - Windows ignores it afterwards.
+    Tk is DPI-unaware and Edge is per-monitor aware; the mismatch scales or clips the
+    hosted page.
     """
     try:
-        # Per-monitor v2 - the mode that keeps a hosted child correct across monitors.
         if USER32.SetProcessDpiAwarenessContext(DPI_PER_MONITOR_AWARE_V2):
             return "per-monitor-v2"
     except (AttributeError, OSError):
@@ -523,17 +442,11 @@ def enable_dpi_awareness() -> str:
 
 
 def is_paint_ready(hwnd: int) -> bool:
-    """True once Chromium has built the compositor surface for this window.
+    """True once Chromium has built its compositor surface.
 
-    Measured: the top-level window appears with its render widget present and sized,
-    but the "Intermediate D3D Window" does not exist for another ~52ms.
-
-    DEFENSIVE, not a fix for a diagnosed bug - reparenting inside that gap was never
-    reproduced, since each host attempt already costs a ~258ms PowerShell round trip.
-    Cheap and correct, so it stays; do not cite it as the cause of anything.
-
-    Falls back to the render widget when there is no D3D surface at all, which is what
-    software rendering looks like, so this can never block hosting forever.
+    Measured: the D3D window appears ~52ms after the top-level window. Defensive only;
+    no bug was ever traced to that gap. Without D3D (software rendering) the render
+    widget counts, so this cannot block hosting forever.
     """
     if not is_alive(hwnd):
         return False
@@ -565,12 +478,8 @@ class _HIGHCONTRAST(ctypes.Structure):
 
 
 def high_contrast() -> bool | None:
-    """True if Windows high-contrast mode is on. None if it could not be asked.
-
-    None rather than False on failure: bruhswer uses this to decide whether its own
-    palette is safe to apply, and guessing "not high contrast" is how a user who needs
-    the accessible theme silently does not get it.
-    """
+    """True if Windows high contrast is on. None if it could not be asked, never a
+    guessed False."""
     info = _HIGHCONTRAST()
     info.cbSize = ctypes.sizeof(_HIGHCONTRAST)
     try:
@@ -583,11 +492,7 @@ def high_contrast() -> bool | None:
 
 
 def prefers_dark() -> bool | None:
-    """Whether Windows apps are set to dark mode. None if it could not be read.
-
-    Read from the user's own registry hive with winreg - no subprocess, and nothing
-    outside HKCU is touched.
-    """
+    """Whether Windows apps use dark mode, read from HKCU. None if unreadable."""
     try:
         with winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,
@@ -601,12 +506,8 @@ def prefers_dark() -> bool | None:
 def is_fitted(hwnd: int, width: int, height: int, tolerance: int = 2) -> bool:
     """True once the hosted window AND its render widget are the requested size.
 
-    is_paint_ready() cannot answer this: a compositor surface stays in existence across
-    a resize, so it reports ready the instant fit() is called.
-
-    Both the top level and the render widget are checked - Chromium resizes the outer
-    window synchronously and its compositor surface on its own schedule, so the outer
-    one alone would report fitted while the page was still the old size.
+    Chromium resizes the outer window at once and the render widget later, so the outer
+    one alone reports fitted too early.
     """
     if not (is_alive(hwnd) and width > 0 and height > 0):
         return False
@@ -628,8 +529,6 @@ def is_fitted(hwnd: int, width: int, height: int, tolerance: int = 2) -> bool:
         USER32.EnumChildWindows(wt.HWND(hwnd), _WNDENUMPROC(_visit), 0)
     except (ctypes.ArgumentError, OSError):
         return False
-    # No render widget at all means there is nothing further to wait for; the outer
-    # window matching is the most that can be established.
     return widget["ok"] if widget["seen"] else True
 
 
@@ -661,17 +560,9 @@ _attached: tuple[int, int] | None = None
 
 
 def attach_input(hosted_hwnd: int, host_hwnd: int) -> bool:
-    """Join the two windows' input queues so typing and clicking reach the browser.
+    """Join the two threads' input queues, or keystrokes never reach the hosted page.
 
-    A reparented window still belongs to a different process, and each GUI thread has
-    its own input queue. `SetParent` moves the window but does not merge them, so
-    keyboard focus never crosses from bruhswer's thread to Edge's - the page renders,
-    the mouse mostly works, and every keystroke goes nowhere. `AttachThreadInput` is
-    the documented way to share focus across threads: no injection, no hooks, no
-    messages synthesised into another process.
-
-    The cost: the two threads share focus state, so if one blocks the other can feel
-    it. The attachment is released on teardown.
+    SetParent moves the window but not its input queue. Released on teardown.
     """
     global _attached
     if not is_alive(hosted_hwnd):
@@ -689,8 +580,7 @@ def attach_input(hosted_hwnd: int, host_hwnd: int) -> bool:
 
 
 def detach_input() -> None:
-    """Release the attachment. Leaving it behind would tie bruhswer's focus state to a
-    browser thread that no longer exists."""
+    """Release the input-queue attachment."""
     global _attached
     if _attached is None:
         return
@@ -707,23 +597,15 @@ def focus(hwnd: int) -> None:
 
 
 def focus_host(host_hwnd: int) -> None:
-    """Take keyboard focus BACK from the hosted browser.
-
-    Attaching the input queues cuts both ways: once focus is on the Edge window,
-    clicking a Tk widget does not necessarily move it back, so bruhswer's own fields
-    accept a click but silently receive no keystrokes.
-    """
+    """Take focus back from the browser: with attached queues, clicking a Tk field
+    does not."""
     if host_hwnd and USER32.IsWindow(host_hwnd):
         USER32.SetFocus(host_hwnd)
 
 
 def request_close(hwnd: int) -> bool:
-    """Ask the browser window to close the way a user would.
-
-    Force-killing Edge leaves the profile marked as crashed, so the next launch offers
-    to reopen the previous session's tabs - a privacy problem for a browser whose point
-    is controlled session state. A real WM_CLOSE records a normal exit.
-    """
+    """Close the browser the way a user would. A kill marks the profile as crashed,
+    and the next launch offers to restore the old tabs."""
     if not is_alive(hwnd):
         return False
     USER32.PostMessageW(wt.HWND(hwnd), WM_CLOSE, 0, 0)

@@ -1,8 +1,7 @@
 """Drive the REAL bruhswer GUI and report what actually happened.
 
-Not a unit test: it builds the real BrowserWindow, lets Tk run, and pokes what a person
-would poke. Nothing here asserts - it reports, so a surprise is visible rather than
-swallowed.
+Builds the real BrowserWindow and pokes what a person would. It reports; it does not
+assert.
 """
 from __future__ import annotations
 
@@ -26,8 +25,6 @@ HOST_TIMEOUT_S = 22.0
 PANEL_TIMEOUT_S = 20.0
 REVERIFY_TIMEOUT_S = 40.0
 
-# The confirmation dialog, identified by title so nothing else can be driven in its
-# place. See drive_cancel.
 DIALOG_TITLE = f"{config.MOAI} bruhswer"
 
 log: list[str] = []
@@ -59,13 +56,8 @@ def wait_for_host(win) -> bool:
 
 
 def open_panel(win, opener, timeout: float = PANEL_TIMEOUT_S) -> bool:
-    """Open one panel, wait for its window, then close it again.
-
-    open_security_panel runs a 5.5s verification off the Tk thread first, so the old
-    look-once check could never pass - and the panel that arrived afterwards was left
-    parented to root, where drive_cancel destroyed it INSTEAD of the dialog and hung
-    the run at step 14. Steps 6 and 27 both did this; 27 reported True regardless.
-    """
+    """Open one panel, WAIT for its window (a pass runs first), then close it. A late
+    panel once got destroyed instead of the dialog and hung step 14."""
     before = {str(c) for c in toplevels(win)}
     opener()
     appeared = pump_until(
@@ -103,20 +95,17 @@ def main() -> int:
                          ("10. quarantine panel", win.open_quarantine_panel)):
         try:
             say(step, open_panel(win, opener))
-        # broad-except: a harness reports failures, it does not die on them
         except Exception:  # lint: allow broad-except
             say(step, False, traceback.format_exc().strip().splitlines()[-1])
 
     # ---- navigation ---------------------------------------------------------
     try:
         win.address.delete(0, "end")
-        # protected-access: drives the real window's internals on purpose
         win._placeholder = False  # lint: allow protected-access
         win.address.insert(0, "example.com")
         win.on_navigate()
         win.root.update()
         say("11. address bar navigation", True, win.status_text.cget("text")[:60])
-    # broad-except: a harness reports failures, it does not die on them
     except Exception:  # lint: allow broad-except
         say("11. address bar navigation", False,
             traceback.format_exc().strip().splitlines()[-1])
@@ -136,9 +125,7 @@ def main() -> int:
         say("13. quarantine has a file to warn about", len(pending) == 1,
             f"{[p.name for p in pending]}")
 
-        # Destroying the dialog is equivalent to its Keep-open button. Matched BY
-        # TITLE: any other Toplevel still on screen is not the dialog, and destroying
-        # one in its place leaves the modal wait blocked forever.
+        # Destroying the dialog = Keep open. Matched by title, or a wrong one is closed.
         def drive_cancel():
             for child in toplevels(win):
                 if child.title() == DIALOG_TITLE:
@@ -147,7 +134,6 @@ def main() -> int:
             win.root.after(200, drive_cancel)
 
         win.root.after(600, drive_cancel)
-        # protected-access: drives the real window's internals on purpose.
         returned = win._confirm_disposable_downloads()  # lint: allow protected-access
         win.root.update()
         say("14. dialog opened and CANCEL returned False (session kept)",
@@ -161,7 +147,6 @@ def main() -> int:
         say("17. disposable profile destroyed", not session.profile_dir.exists(),
             str(session.profile_dir))
         say("18. its quarantine destroyed with it", not qdir.exists(), str(qdir))
-    # broad-except: a harness reports failures, it does not die on them
     except Exception:  # lint: allow broad-except
         say("12-18. disposable flow", False,
             traceback.format_exc().strip().splitlines()[-1])
@@ -171,9 +156,6 @@ def main() -> int:
         win.open_session(session_manager.PERSISTENT)
         wait_for_host(win)
 
-        # A green PANIC light over an unregistered hotkey is a promise bruhswer
-        # cannot keep, so the indicator is checked against the registration.
-        # protected-access: drives the real window's internals on purpose
         armed = win._panic_hotkey.available  # lint: allow protected-access
         hint = win.panic_hint.cget("text")
         say("20. panic key registered", armed,
@@ -189,8 +171,7 @@ def main() -> int:
         say("23. drain callback scheduled",
             win._drain_job is not None)  # lint: allow protected-access
 
-        # The whole feature: the lights must stop being a launch-time snapshot, so a
-        # SECOND pass has to land from the worker and reach the widgets.
+        # A second pass must arrive from the worker and reach the widgets.
         live = win.controller.session
         assert live is not None, "no session to re-verify"
         win._verifier.submit(  # lint: allow protected-access
@@ -213,12 +194,10 @@ def main() -> int:
             try:
                 say(f"27.{name} panel renders with the new checks",
                     open_panel(win, opener))
-            # broad-except: a harness reports failures, it does not die on them
             except Exception:  # lint: allow broad-except
                 say(f"27.{name} panel renders with the new checks", False,
                     traceback.format_exc().strip().splitlines()[-1])
 
-        # Both directions: shown when an account is attached, hidden when not.
         account = [c for c in win.result.checks
                    if c.check_id == "privacy.account"] if win.result else []
         shown = bool(win.account_banner.winfo_ismapped())
@@ -227,10 +206,9 @@ def main() -> int:
             f"shown={shown} verdict="
             f"{account[0].verdict if account else 'none'}")
 
-        # The panic path on a real session. It terminates Edge, so it goes last.
+        # Panic terminates Edge, so it goes last.
         session = win.controller.session
         profile = session.profile_dir if session else None
-        # protected-access: drives the real window's internals on purpose
         win._on_panic()  # lint: allow protected-access
         win.root.update()
         say("29. panic stopped the session", win.controller.session is None,
@@ -245,24 +223,17 @@ def main() -> int:
         say("32. panic released the hotkey",
             not win._panic_hotkey.available)  # lint: allow protected-access
 
-        # close_session() used to release the hotkey and leave the PANIC dot green
-        # with the hint still reading Ctrl+Shift+End.
         win.open_session(session_manager.PERSISTENT)
         wait_for_host(win)
-        # protected-access: drives the real window's internals on purpose
         armed_before = win._panic_hotkey.available  # lint: allow protected-access
         win.close_session()
         win.root.update()
         say("32b. panic indicator honest after close_session",
-            # protected-access: drives the real window's internals on purpose
             (not win._panic_hotkey.available)  # lint: allow protected-access
             and win.panic_hint.cget("text") == "UNAVAILABLE",
             f"armed_before={armed_before} "
-            # protected-access: drives the real window's internals on purpose
             f"after={win._panic_hotkey.available} "  # lint: allow protected-access
-            # protected-access: drives the real window's internals on purpose
             f"hint={win.panic_hint.cget('text')!r}")  # lint: allow protected-access
-    # broad-except: a harness reports failures, it does not die on them
     except Exception:  # lint: allow broad-except
         say("20-32. hardening-pass surfaces", False,
             traceback.format_exc().strip().splitlines()[-1])
@@ -271,7 +242,6 @@ def main() -> int:
     try:
         win.root.destroy()
         say("33. clean shutdown", True)
-    # broad-except: a harness reports failures, it does not die on them
     except Exception:  # lint: allow broad-except
         say("33. clean shutdown", False,
             traceback.format_exc().strip().splitlines()[-1])

@@ -1,17 +1,8 @@
-"""The only three verdicts bruhswer uses, and the shape of a check result.
+"""The three verdicts and the shape of a check result.
 
-A security indicator that lies is itself a vulnerability, so there are exactly three
-verdicts, UNKNOWN is never silently promoted to PASS, and every Check carries its
-evidence.
-
-`enforceable=False` marks a control that CANNOT exist on this platform, as opposed to
-one that merely failed. Windows Firewall cannot filter loopback, so "browser cannot
-reach 127.0.0.1" is a FAIL no amount of configuration will fix.
-
-`EvidenceKind` exists because PASS says a check succeeded, not how bruhswer knows. A
-live token read, a preference read out of a JSON file, and a claim reasoned from
-bruhswer's own privilege level all rendered as the same green dot, and careful `detail`
-wording does not fix that - the dot is what people read.
+UNKNOWN is never promoted to PASS. `enforceable=False` marks a control the platform
+cannot provide at all (loopback filtering). `EvidenceKind` says HOW a PASS is known,
+because a live measurement and a settings read looked like the same green dot.
 """
 
 from __future__ import annotations
@@ -30,27 +21,18 @@ class Verdict(enum.Enum):
 
 
 class EvidenceKind(enum.Enum):
-    """How a check knows what it claims. Ordered weakest-last.
+    """How a check knows what it claims, strongest first."""
 
-    LIVE vs READ_BACK is the distinction this project keeps getting wrong: a firewall
-    rule can be present, enabled and correctly scoped, and still not stop a packet.
-    """
-
-    # Observed on this machine during this pass: a live token, a file hashed now,
-    # processes actually running.
+    # Observed on this machine during this pass.
     LIVE = "live measurement"
 
-    # A SETTING read back from the OS or a profile file just now. Proves the
-    # configuration exists, NOT that it is enforced, so detail text on a READ_BACK
-    # check must be phrased as a statement about configuration.
+    # A setting read back now: proves it is configured, not that it is enforced.
     READ_BACK = "read-back"
 
-    # A real experiment from an earlier stage, not re-run this pass. It describes a
-    # moment that has passed; the machine and both builds may have moved since.
+    # A measurement from an earlier stage, not re-run.
     HISTORICAL = "historical evidence"
 
-    # Reasoned rather than measured. The weakest kind, and the DEFAULT, so a check
-    # whose author forgot to declare one understates what bruhswer knows.
+    # Reasoned, not measured. The default, so forgetting one understates.
     INFERENCE = "inference"
 
     def __str__(self) -> str:
@@ -58,17 +40,11 @@ class EvidenceKind(enum.Enum):
 
 
 class UnknownReason(enum.Enum):
-    """WHY a check came back UNKNOWN.
-
-    A missing cmdlet, a refused query, a slow helper and a property nobody has ever
-    measured call for four different responses. The probe-level codes mirror
-    `sysquery.ProbeStatus` by value, so a reason carries from the failed query to the
-    light on screen without anything inventing one in between.
-    """
+    """Why a check came back UNKNOWN. The probe codes mirror sysquery.ProbeStatus."""
 
     NONE = ""
 
-    # --- carried up from a failed sysquery probe --------------------------------
+    # From a failed sysquery probe.
     TIMEOUT = "TIMEOUT"
     PERMISSION_DENIED = "PERMISSION_DENIED"
     UNSUPPORTED = "UNSUPPORTED"
@@ -76,23 +52,16 @@ class UnknownReason(enum.Enum):
     MALFORMED_OUTPUT = "MALFORMED_OUTPUT"
     PROBE_ERROR = "PROBE_ERROR"
 
-    # --- reasons that are about bruhswer's own state, not a failed query --------
-    # Nothing is running yet, so the property has nothing to be true of.
+    # About bruhswer's own state, not a failed query.
     NO_SESSION = "NO_SESSION"
-    # No profile has been created, so there is no file to read a setting out of.
     NO_PROFILE_YET = "NO_PROFILE_YET"
-    # The artefact exists and bruhswer could not read it. NOT the same as it being
-    # absent, and never to be reported as a clean negative result.
+    # Exists but could not be read: never a clean negative.
     UNREADABLE = "UNREADABLE"
-    # Part of the population was measured and part could not be. Reported as UNKNOWN
-    # rather than passing on the subset that happened to be readable.
+    # Only part could be measured.
     PARTIAL_EVIDENCE = "PARTIAL_EVIDENCE"
-    # No measurement of this property exists - not here, not in an earlier stage.
-    # An honest admission of a gap, as opposed to a measurement that failed.
+    # No measurement exists at all.
     NEVER_MEASURED = "NEVER_MEASURED"
-    # The query succeeded and the property simply has no value in the current state -
-    # a network category with no network attached, for instance. Distinct from every
-    # code above, all of which mean bruhswer tried to find out and could not.
+    # The query worked; the property has no value now (e.g. no network attached).
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
     def __str__(self) -> str:
@@ -100,12 +69,8 @@ class UnknownReason(enum.Enum):
 
 
 def reason_for_probe(status) -> UnknownReason:
-    """Map a `sysquery.ProbeStatus` onto the matching `UnknownReason`.
-
-    BY VALUE, not by importing sysquery: this module is the leaf of the dependency
-    graph. test_evidence_model.py asserts the two enums stay in step, so a new
-    ProbeStatus nobody mapped fails the build rather than becoming PROBE_ERROR here.
-    """
+    """Map a sysquery.ProbeStatus to an UnknownReason by value; this module imports
+    nothing. A test keeps the two enums in step."""
     try:
         return UnknownReason(str(status))
     except ValueError:
@@ -123,21 +88,14 @@ class Check:
     evidence: str = ""
     critical: bool = False
     enforceable: bool = True
-    # Defaults to the WEAKEST kind on purpose: forgetting to declare one must never be
-    # how a check acquires a stronger claim than it earned. test_evidence_model.py
-    # fails the build if any check the verifier emits is left on the default.
+    # The weakest kind by default; a test fails any check left on it.
     evidence_kind: EvidenceKind = EvidenceKind.INFERENCE
     unknown_reason: UnknownReason = UnknownReason.NONE
 
     @property
     def blocks_launch(self) -> bool:
-        """Fail-closed: a critical check blocks launch unless it PASSES, and UNKNOWN
-        blocks too - that is the point of having three verdicts.
-
-        A known-unenforceable control is the exception. Refusing to launch because
-        Windows cannot filter loopback would make the product unusable while changing
-        nothing about the user's exposure, so it is surfaced prominently instead.
-        """
+        """A critical check blocks launch unless it PASSES, so UNKNOWN blocks too. An
+        unenforceable control never blocks; it is shown instead."""
         if not self.enforceable:
             return False
         return self.critical and self.verdict is not Verdict.PASS
@@ -149,11 +107,7 @@ class Check:
                 Verdict.UNKNOWN: "UNKNOWN"}[self.verdict]
 
     def evidence_note(self) -> str:
-        """One short phrase naming what this verdict rests on, written for a user.
-
-        Rendered next to the verdict everywhere, so a green dot backed by a preference
-        read cannot be mistaken for one backed by a live measurement.
-        """
+        """A short phrase for the user naming what this verdict rests on."""
         if (self.verdict is Verdict.UNKNOWN
                 and self.unknown_reason is not UnknownReason.NONE):
             return f"not established: {self.unknown_reason}"
@@ -166,8 +120,7 @@ class Check:
 
 
 def worst(checks: list[Check]) -> Verdict:
-    """Aggregate. Any FAIL wins, then any UNKNOWN. Unenforceable checks are excluded
-    because they describe the platform, not this run's configuration."""
+    """Any FAIL wins, then any UNKNOWN. Unenforceable checks are excluded."""
     live = [c for c in checks if c.enforceable]
     if any(c.verdict is Verdict.FAIL for c in live):
         return Verdict.FAIL

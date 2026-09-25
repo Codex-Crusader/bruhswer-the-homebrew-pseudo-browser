@@ -1,22 +1,11 @@
-"""A global panic hotkey: Ctrl+Shift+End stops this session's browser at once.
+"""Global panic hotkey: Ctrl+Shift+End stops this session's browser at once.
 
-A dedicated thread, not a Tk `after()` tick. `RegisterHotKey(NULL, ...)` posts WM_HOTKEY
-to the REGISTERING THREAD's queue as a thread message with no target window, and Tk
-pumps the main thread's queue inside `mainloop` - so registering there races Tk's own
-pump, which can remove and discard the message first. That design appears to work when
-tested by hand and silently drops the key in use, which for a panic control is the worst
-possible failure. So it registers on a thread bruhswer owns that does nothing but block
-in `GetMessageW`, and never touches Tk.
+Registered on its own thread that only blocks in GetMessageW: WM_HOTKEY goes to the
+registering thread's queue, and on the Tk thread mainloop can discard it. The thread
+only queues a token; the work happens elsewhere.
 
-This thread does not enumerate processes, terminate anything, or read a profile:
-enumeration alone is a PowerShell round trip that can take a minute, which would make
-the hotkey non-immediate and prevent a bounded teardown. Its whole job is to notice the
-key and put a token on a queue.
-
-If registration fails - another application, including a second copy of bruhswer, may
-already own Ctrl+Shift+End - `available` reads False and the UI says so prominently.
-There is deliberately no Tk-level fallback: a key that works only while bruhswer has
-focus is not a panic key, since the point is to fire while the browser has focus.
+If another program owns the key, `available` is False and the UI says so. No Tk
+fallback: a key that works only while bruhswer has focus is not a panic key.
 """
 
 from __future__ import annotations
@@ -66,7 +55,6 @@ class PanicHotkey:
         self._registered = False
         self._error = ""
 
-    # --- Tk-thread API ----------------------------------------------------------
 
     @property
     def available(self) -> bool:
@@ -87,8 +75,6 @@ class PanicHotkey:
         self._thread = threading.Thread(
             target=self._loop, name="bruhswer-panic-key", daemon=True)
         self._thread.start()
-        # Block only until the thread has tried to register, so the caller can show an
-        # accurate armed/unavailable state immediately rather than guessing.
         self._ready.wait(timeout=config.PANIC_JOIN_TIMEOUT_SECONDS)
         if self._registered:
             _log.info("panic hotkey registered (%s)", config.PANIC_HOTKEY_LABEL)
@@ -102,24 +88,19 @@ class PanicHotkey:
         if thread is None:
             return
         if thread_id is not None:
-            # WM_QUIT to the THREAD, not a window - GetMessageW returns 0 on it and the
-            # loop unwinds through its finally, unregistering the key.
+            # WM_QUIT to the thread: GetMessageW returns 0 and the key is unregistered.
             USER32.PostThreadMessageW(wt.DWORD(thread_id), WM_QUIT, 0, 0)
         thread.join(timeout=config.PANIC_JOIN_TIMEOUT_SECONDS)
         self._thread = None
         self._thread_id = None
         self._registered = False
 
-    # --- listener thread --------------------------------------------------------
 
     def _loop(self) -> None:
         """Register, then block on GetMessageW. Touches no Tk object, ever."""
         message = wt.MSG()
 
-        # Force this thread's message queue into existence BEFORE registering or
-        # posting to it. A thread has no queue until it first calls a message
-        # function, and PostThreadMessageW to a thread without one silently fails -
-        # which would make stop() unable to wake this thread at all.
+        # Create the message queue first, or stop()'s PostThreadMessageW fails silently.
         USER32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_NOREMOVE)
         self._thread_id = int(KERNEL32.GetCurrentThreadId())
 
@@ -137,8 +118,6 @@ class PanicHotkey:
                 return
             self._registered = True
         finally:
-            # Set AFTER _registered/_error are final, so start() never reads a
-            # half-written state.
             self._ready.set()
 
         try:

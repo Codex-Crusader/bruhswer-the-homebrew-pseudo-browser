@@ -1,23 +1,10 @@
-"""Network regression suite — SS12 scope, SS13 browser self-bypass.
+"""Network regression: rule scope, and the browser trying to bypass its rules.
 
 Requires the network policy to be applied (tools/bruhswer-netpolicy.ps1 -Action apply).
 
-Separate because two claims were being asserted rather than measured.
-
-`net.tamper` INFERS tamper-resistance from "bruhswer is unelevated" plus the A17
-measurement. Reasonable, but not a test. This file actually attempts the bypasses,
-unelevated, in the same token class as the browser process - gate A4 measured the Edge
-browser process token-equivalent to an ordinary user process. It also covers the case
-A17 never tried: a PERMISSIVE REPLACEMENT rule, since deleting the block is not the only
-way out.
-
-"Unrelated applications are not accidentally blocked" had no standing test at all. A
-change widening those rules from `-Program msedge.exe` to machine-wide would have gone
-unnoticed until the user's other software lost the network.
-
-Every attempt here is EXPECTED to fail. If one unexpectedly succeeds the test removes
-what it created before reporting - it must never leave a permissive rule behind. It
-changes nothing on success paths and needs no elevation.
+Attempts the bypasses net.tamper only infers, unelevated like the browser, including
+adding a permissive rule. Also checks other programs still reach the router. Every
+attempt should fail; anything created is removed before reporting.
 """
 
 from __future__ import annotations
@@ -34,8 +21,7 @@ import _env  # noqa: E402
 from app import config, sysquery  # noqa: E402
 
 CURL = os.path.join(os.environ["SystemRoot"], "System32", "curl.exe")
-# Discovered at run time - see tests/_env.py. Hardcoding one machine's
-# gateway made this suite pass while probing an address that did not exist.
+# Discovered at run time (tests/_env.py).
 ROUTER = _env.require_gateway()
 PROBE_RULE = "bruhswer-SELFTEST-should-never-exist"
 
@@ -113,7 +99,7 @@ def main() -> int:
              f"$_.Exception.GetType().Name }}")
     check("cannot MODIFY its own block rule", not out.startswith("MODIFIED"), out)
 
-    # The case Stage 4 never tried: do not delete the block, out-vote it.
+    # Not deleting the block: out-voting it with an Allow rule.
     out = ps(f"try {{ New-NetFirewallRule -DisplayName '{PROBE_RULE}' "
              f"-Direction Outbound -Action Allow -Program '{edge}' "
              f"-RemoteAddress Any -Profile Any -ErrorAction Stop | Out-Null; "
@@ -138,8 +124,7 @@ def main() -> int:
         check(f"{rule.get('Name')} names only the browser executable",
               program == str(edge).lower(), program or "<no program filter>")
 
-    # The regression that would otherwise go unnoticed: a rule accidentally widened to
-    # every program. curl.exe is not the browser, so it must still reach the router.
+    # A rule widened to every program would block curl too.
     proc = subprocess.run([CURL, "-s", "-m", "8", "-o", os.devnull,
                            f"http://{ROUTER}/"],
                           capture_output=True, text=True, encoding="utf-8",

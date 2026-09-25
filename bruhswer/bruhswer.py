@@ -6,10 +6,7 @@
     python bruhswer.py --hostguard  host exposure only, no browser involved
     python bruhswer.py --uninstall  show and remove everything bruhswer left
 
---check runs the security verification headless, for tests and CI. --hostguard answers
-a different question from the rest of bruhswer - not "what can a website reach?" but
-"what can the laptop at the next table reach?" - which matters whether or not the
-browser is running. Neither launches a browser, and neither changes anything.
+--check and --hostguard launch no browser and change nothing.
 """
 
 from __future__ import annotations
@@ -30,27 +27,12 @@ _MARK = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.UNKNOWN: "UNKNOWN"}
 
 
 def _use_utf8_stdio() -> None:
-    """Make the text modes UTF-8 before anything is printed.
-
-    Measured: `python bruhswer.py --check > out.txt` died with UnicodeEncodeError
-    before one line. Redirected, Python picks the legacy ANSI codepage, which cannot
-    encode the moai - so every text mode died on its first print, and so did the whole
-    suite under CI, where stdout is always a pipe.
-
-    Fixed here rather than in the strings: dropping the emoji would hide the defect
-    while leaving arrows, bullets and accented CA subject names able to kill a security
-    report mid-sentence. `errors="replace"` so an unexpected character degrades to a
-    placeholder instead of terminating it.
-    """
+    """Make stdout and stderr UTF-8. Redirected, Python uses the ANSI codepage and
+    `--check > out.txt` died on its first line (measured)."""
     for stream in (sys.stdout, sys.stderr):
-        # getattr rather than a direct call. `reconfigure` is a TextIOWrapper method,
-        # not part of the TextIO protocol, so calling it directly is an unresolved
-        # reference to every static checker. Behaviour is unchanged - the old code
-        # caught AttributeError for precisely this case; the lookup is now explicit.
+        # getattr: reconfigure is not part of the TextIO protocol.
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
-            # Not a reconfigurable text stream (redirected oddly, or already closed).
-            # Printing may still fail, but bruhswer must not fail to START over it.
             continue
         try:
             reconfigure(encoding="utf-8", errors="replace")
@@ -90,7 +72,7 @@ def run_check() -> int:
 
 
 def run_hostguard() -> int:
-    """Host exposure only. No browser, no session, no changes (brief SS11)."""
+    """Host exposure only. No browser, no session, no changes."""
     from app.host import host_guard
 
     checks = host_guard.evaluate()
@@ -148,24 +130,16 @@ def _is_reparse_point(path: Path) -> bool:
 
 
 def run_uninstall() -> int:
-    """Show and remove everything bruhswer has put on this machine.
-
-    THE REASON THIS EXISTS: bruhswer's firewall rules are scoped to the browser and
-    survive independently of bruhswer. Someone who applies network policy and then
-    deletes the folder is left with Edge permanently unable to reach their own router
-    or NAS, with nothing on the machine to explain why. That is a genuine harm caused
-    by uninstalling, and a security tool must not leave that behind.
-
-    Removes what it can unelevated, and prints the exact commands for what it cannot.
-    """
+    """Show and remove everything bruhswer put on this machine. The firewall rules
+    outlive bruhswer and would leave Edge unable to reach the LAN, so the commands to
+    remove them are printed."""
     print(f"{config.MOAI} bruhswer - remove everything")
     print("=" * 78)
 
     rules = sysquery.bruhswer_rules()
     print("\n1. FIREWALL RULES  (need Administrator - bruhswer will not elevate itself)")
     if not rules.ok:
-        # "none present" here would tell the user to skip a cleanup step that may be
-        # the one leaving Edge blocked after bruhswer is gone.
+        # A failed query must not read as "no rules to remove".
         print(f"     could not read the firewall rules ({rules.status}). Check for "
               f"rules named {config.RULE_PREFIX}-* yourself before assuming none exist.")
     elif rules.value:
@@ -212,10 +186,8 @@ def run_uninstall() -> int:
             return 0
 
     for path in removable:
-        # Refuse to follow a link out of bruhswer's own data root. These four paths
-        # are bruhswer's own constants, so a junction sitting at one of them is not a
-        # normal state - it is either a deliberate redirection or damage, and either
-        # way turning a recursive delete loose on its target is the wrong response.
+        # A junction at one of bruhswer's own paths is redirection or damage; never
+        # delete through it.
         if _is_reparse_point(path):
             print(f"  SKIPPED: {path} is a link or junction, not a folder. Refusing "
                   f"to delete through it - check what it points at before removing "
@@ -238,10 +210,7 @@ def main() -> int:
     if "--uninstall" in sys.argv[1:]:
         return run_uninstall()
 
-    # Before ANY window is created. Tk is DPI-unaware by default while Edge is
-    # per-monitor aware; hosting one inside the other with that mismatch makes Windows
-    # virtualise the parent's coordinates but not the child's, and the page renders at
-    # the wrong scale or clipped. Windows ignores this call once a window exists.
+    # Before any window exists; see embed.enable_dpi_awareness.
     from app.browser import embed  # noqa: E402 - must happen before Tk starts
     mode = embed.enable_dpi_awareness()
     get_logger("startup").info("DPI awareness: %s", mode)
@@ -253,7 +222,6 @@ def main() -> int:
         return run_check()
 
     if "--panel" in sys.argv[1:]:
-        # The original control panel, kept because it is useful without a browser.
         from app.ui.app_ui import BruhswerUI
         BruhswerUI().run()
         return 0

@@ -1,14 +1,7 @@
-"""Test environment discovery — so the suite is not tied to one machine's network.
+"""Test environment discovery, so the suites are not tied to one network.
 
-The network tests need a real LAN peer to prove the firewall rules block it. That was
-hardcoded to the gateway of the machine bruhswer was developed on, which meant the suite
-would still "pass" on someone else's PC while probing an address that does not exist -
-a test that quietly proves nothing.
-
-The gateway is discovered at run time instead, and the tests refuse to run if there
-isn't one rather than testing a made-up address.
-
-Read-only. No scanning: the default gateway is a single address the OS already knows.
+The gateway is discovered at run time, and the tests refuse to run without one; a
+hardcoded address once "passed" on other machines. Read-only, no scanning.
 """
 
 from __future__ import annotations
@@ -59,11 +52,8 @@ def default_gateway() -> str | None:
         address = ipaddress.ip_address(value)
     except ValueError:
         return None
-    # A gateway outside the private ranges would not be covered by bruhswer's rules,
-    # so a test using it as the "blocked LAN peer" would be measuring nothing.
+    # A public gateway is not covered by the rules, so it would measure nothing.
     if address.is_private and not address.is_loopback:
-        # .compressed is the documented str form; str() on the IPv4Address |
-        # IPv6Address union is what static checkers cannot resolve.
         return address.compressed
     return None
 
@@ -89,15 +79,8 @@ _Q_LAN_IP = (
 
 
 def host_lan_ip() -> str | None:
-    """This machine's own address on the LAN, or None.
-
-    The localhost suite needs it for one specific question that nothing else answers:
-    the host's own IP sits INSIDE the private ranges bruhswer's firewall rules block,
-    yet traffic a program sends to its own address never leaves the machine and is
-    therefore never seen by the firewall. Whether that address behaves like "blocked
-    LAN" or like "unfilterable loopback" is exactly the sort of thing that must be
-    measured rather than reasoned about.
-    """
+    """This machine's LAN address, or None. It is in the blocked ranges yet never
+    leaves the machine, so the localhost suite measures which way it behaves."""
     try:
         proc = subprocess.run(
             [str(config.POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",

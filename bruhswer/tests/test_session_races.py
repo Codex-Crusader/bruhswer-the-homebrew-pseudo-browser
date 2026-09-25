@@ -1,21 +1,5 @@
-"""The lifecycle races no other suite covers.
-
-The browser suites drive the happy path end to end. They do NOT cover what happens when
-a background verification pass and a session teardown overlap, and that is exactly where
-a stale verdict about a destroyed session can reach the lights of a live one.
-
-Four scenarios, all from the release checklist, none of them previously tested:
-
-    regression -> recovery -> re-verification
-    close-session racing a verification pass that is already running
-    panic during startup, during use, and during teardown
-    no stale UI from a previous session appearing in the next one
-
-These run against the mixin and the controller directly, with fake widgets. No browser,
-no Tk, milliseconds. That is only possible because BrowserWindow was split: the
-verification display used to be welded to a live window, so this logic could not be
-reached without launching Edge.
-"""
+"""Lifecycle races: regression and recovery, close racing a pass, panic at every
+stage, and no stale UI across sessions. Fake widgets; no browser, no Tk."""
 
 from __future__ import annotations
 
@@ -151,7 +135,6 @@ class _Window(VerificationUIMixin):
         self.curtain_hidden = 0
         self.panics = 0
 
-    # --- the shell surface the mixin calls ---------------------------------------
     def _after(self, _delay_ms, _callback):  # lint: allow could-be-static
         return "job"
 
@@ -216,7 +199,7 @@ class TestRegressionRecoveryCycle(unittest.TestCase):
     def test_the_banner_survives_dismissing_the_curtain(self):
         """'Keep browsing' is legitimate; erasing every trace of it is not."""
         self.win._warn_regressions((("a", "A"),))
-        self.win._hide_curtain()            # what the "Keep browsing" button does
+        self.win._hide_curtain()
         self.assertTrue(self.win.regression_banner.packed,
                         "dismissing the curtain left no sign the session is degraded")
 
@@ -242,7 +225,6 @@ class TestCloseSessionRacesVerification(unittest.TestCase):
         self.win._drain()
         self.assertIs(self.win.result, fresh)
 
-        # A slower pass, submitted earlier, lands afterwards.
         self.win._verifier.pending = [_update(1, stale, verification_id=4)]
         self.win._drain()
         self.assertIs(self.win.result, fresh,
@@ -277,8 +259,7 @@ class TestNoStaleUiAcrossSessions(unittest.TestCase):
         self.assertFalse(self.win.regression_banner.packed)
 
     def test_the_new_session_does_not_withdraw_the_old_ones_warning(self):
-        """Session A's warned ids leaking into B made B's first clean pass call
-        _hide_curtain() and report recovery for a session that no longer existed."""
+        """A's warned ids must not let B's first pass report A's recovery."""
         self.win._warn_regressions((("net.rule.x", "Firewall rule x"),))
         self.win._reset_verification_state()
         hidden_before = self.win.curtain_hidden
@@ -293,9 +274,7 @@ class TestNoStaleUiAcrossSessions(unittest.TestCase):
                          "warning about the previous session")
 
     def test_stopping_reverification_is_what_performs_the_reset(self):
-        """The wiring, not just the reset. open_session() and close_session() both go
-        through _stop_reverification, so if it stops resetting, every test above still
-        passes while the real flow leaks state across sessions again."""
+        """The reset is wired through _stop_reverification, which the real flow calls."""
         self.win._warn_regressions((("net.rule.x", "Firewall rule x"),))
         self.win._applied_verification_id = 42
         self.win._stop_reverification()
@@ -303,7 +282,7 @@ class TestNoStaleUiAcrossSessions(unittest.TestCase):
         self.assertEqual(self.win._applied_verification_id, 0)
 
     def test_the_applied_id_resets_so_the_new_session_is_not_ignored(self):
-        """Without this, session B's ids restart below A's and every pass is dropped."""
+        """Or B's ids restart below A's and every pass is dropped."""
         self.win._applied_verification_id = 99
         self.win._reset_verification_state()
         self.win.controller.generation = 2
@@ -493,8 +472,6 @@ class _LifecycleWindow(SessionLifecycleMixin):
         self.status = ""
         self.calls: list[str] = []
 
-    # --- the shell surface the mixin calls, both from WindowShell and from the
-    # other mixin (VerificationUIMixin), which is not mixed in here -----------------
     def _after(self, _delay_ms, _callback):  # lint: allow could-be-static
         return "job"
 
@@ -533,17 +510,7 @@ class _LifecycleWindow(SessionLifecycleMixin):
 @mock.patch.object(session_lifecycle, "embed", autospec=True)
 @mock.patch.object(session_lifecycle, "dialogs", autospec=True)
 class TestCurtainPaintsBeforeTheBlockingCall(unittest.TestCase):
-    """F-2: open_session, close_session and on_close each block on
-    controller.stop() (up to ~22s worst case: an 8s process wait, a 12s
-    profile-process poll, a 2s settle) or controller.start() (its own ~5.5s
-    verification pass). The curtain explaining that must be PAINTED - not just
-    scheduled - before the block starts, or the window looks frozen and blank for
-    the entire wait with nothing on screen saying why.
-
-    root.update_idletasks() is what forces the paint; there is no fake for that
-    effect, so what these pin is the cheaper, necessary half: _show_curtain runs
-    before controller.stop(), not after.
-    """
+    """The curtain is shown before controller.stop() blocks (up to ~22s), not after."""
 
     def _assert_curtain_before_stop(self, order: list[str]) -> None:
         self.assertIn("stop", order, f"controller.stop() was never called: {order}")
@@ -577,8 +544,7 @@ class TestCurtainPaintsBeforeTheBlockingCall(unittest.TestCase):
 
     def test_on_close_with_no_running_session_does_not_need_a_curtain(
             self, mock_dialogs, _mock_embed):
-        """Nothing to stop, so no curtain is required - this must not regress into
-        expecting one where there is nothing to wait for."""
+        """Nothing to stop, so no curtain."""
         mock_dialogs.confirm_disposable_downloads.return_value = True
         win = _LifecycleWindow()
         win.controller.running = False

@@ -1,16 +1,7 @@
-"""The bruhswer browser window.
+"""The bruhswer browser window: a hosted Edge window inside bruhswer's frame.
 
-A real browser: a hosted Edge window with its own tabs, back/forward and reload, wrapped
-in bruhswer's frame, address bar, security chrome and session lifecycle.
-
-Presentation and interaction only. Every security decision belongs to the guards and
-SessionManager; this file never re-implements a check, decides whether launch is
-allowed, or manages a session. Tabs, back, forward and reload are Edge's own controls
-inside the hosted window, not reimplementations and not fake tabs that swap a URL.
-
-A status light is only green if a check returned PASS. LOCALHOST is permanently amber
-and reads NOT ENFORCEABLE, because Windows Firewall cannot filter loopback. VPN reads
-UNSUPPORTED. Humour never replaces a security fact.
+Presentation only; every security decision belongs to the guards. A light is green
+only if a check returned PASS. LOCALHOST is always amber (NOT ENFORCEABLE).
 """
 
 from __future__ import annotations
@@ -42,43 +33,27 @@ from .panels import (
 class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
     def __init__(self) -> None:
         self.controller = ctrl.Controller()
-        # ANNOTATED, not just assigned. A bare `= None` makes every static checker
-        # infer the attribute's type AS None, so every later `self.result.blockers`
-        # reads as an unresolved reference on NoneType - which is most of this
-        # project's "unresolved reference" inspections, and it cascades into the test
-        # harnesses that read `win.result.blockers` too.
         self.result: verifier.VerificationResult | None = None
         self.hosted_hwnd: int | None = None
         self._host_attempts = 0
         self._watch_job: str | None = None
         self._placeholder = True
 
-        # Runtime re-verification. The worker does the 14 helper processes on its own
-        # thread; this window only ever drains its queue. See ui/verify_worker.py for
-        # why none of that may happen on the Tk thread.
+        # Re-verification runs on the worker thread; this window only drains its queue.
         self._verifier = VerifyWorker()
         self._drain_job: str | None = None
         self._closing = False
-        # A synchronous one-shot pass used to serialise repeat clicks by accident, by
-        # freezing the window. Without that freeze, two overlapping startup() calls can
-        # each decide to open a session and race each other's stop()/start().
+        # Two overlapping startup() calls would race each other's stop()/start().
         self._verify_in_flight = False
-        # check_ids currently named in a regression warning, so the warning can be
-        # withdrawn once every one of them verifies again.
+        # check_ids in the current regression warning, to withdraw it on recovery.
         self._warned_ids: set[str] = set()
         self._applied_verification_id = 0
 
-        # Global panic hotkey. Owns its own listener thread; see ui/panic_key.py for
-        # why a Tk-level binding cannot do this job.
         self._panic_hotkey = panic_key.PanicHotkey()
         self._panic_fired = False
-        # EVERY pending `after` id - cancelling one of six timers is not teardown, and
-        # the rest fired against a destroyed root as `invalid command name ..._watch`.
-        # Every schedule goes through _after() and lands here.
+        # Every pending `after` id, so teardown cancels all of them, not one of six.
         self._jobs: set[str] = set()
 
-        # Declared here so the full set of instance state is visible in one place.
-        # Annotation only, no assignment - see the note in app_ui.py.
         self.session_badge: tk.Label
         self.bruh_button: tk.Button
         self.address: tk.Entry
@@ -92,14 +67,10 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self.regression_text: tk.Label
         self.panic_hint: tk.Label
         self.lights: dict[str, tk.Label] = {}
-        # The word beside each dot, so a count can be appended to it.
         self.light_labels: dict[str, tk.Label] = {}
 
-        # BEFORE _build(), because every widget reads its colours from config once, at
-        # construction. bruhswer's palette is a fixed dark theme whose amber and green
-        # do not clear WCAG AA on black; under high contrast that makes the status
-        # lights - the whole product - hard to read for the user who most needs them.
-        # High contrast wins: it is an accessibility requirement, not a preference.
+        # Before _build(): widgets read their colours once. The dark palette fails WCAG
+        # AA, so Windows high contrast wins.
         self.high_contrast = embed.high_contrast()
         if self.high_contrast:
             config.apply_high_contrast()
@@ -115,24 +86,13 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._build()
-        # Cancel pending jobs on destruction by ANY route, not just on_close(): a test,
-        # a harness or a fatal dialog path can call root.destroy() directly and leave
-        # them armed. The guards inside _watch/_drain cannot help - Tk fails to
-        # dispatch before any Python in them runs.
+        # Cancel timers however the root is destroyed, not only through on_close().
         self.root.bind("<Destroy>", self._on_destroy)
         self._after(120, self.startup)
 
     def _after(self, delay_ms: int, callback):
-        """Schedule a Tk callback AND remember it, so teardown can cancel it.
-
-        Returns the job id, so the few callers that also track a job in a named
-        attribute (_watch_job, _drain_job) keep working unchanged.
-
-        `_jobs` used to only grow - `_watch` and `_drain` reschedule themselves for the
-        life of the session, adding ~19,000 dead entries an hour. The callback is
-        wrapped so a completed job removes its own id before the caller's code runs,
-        whether or not it reschedules.
-        """
+        """Schedule a Tk callback and track its id until it runs, so teardown can cancel
+        it. A finished job removes its own id; `_jobs` once grew ~19,000 entries/hour."""
         job_id: list[str] = []
 
         def _run_and_forget() -> None:
@@ -157,11 +117,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self._drain_job = None
 
     def _on_destroy(self, event=None) -> None:
-        """Tear down timers when the ROOT goes away. Idempotent and never raises.
-
-        <Destroy> propagates from every child widget, so this fires many times during
-        teardown; only the root's own event matters.
-        """
+        """Cancel timers when the ROOT is destroyed. <Destroy> also fires per child."""
         if event is not None and event.widget is not self.root:
             return
         self._closing = True
@@ -169,15 +125,9 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
 
     @staticmethod
     def _opening_geometry(want_w: int, want_h: int) -> str:
-        """Fit the window inside the taskbar-free work area, and place it there.
-
-        A fixed 1280x860 became a 907px window whose bottom sat at the screen edge, so
-        the status bar - the six verdict lights, the whole point of the product - was
-        rendered underneath the taskbar and could not be seen at all. Measured on
-        1920x1080 at 125%: 60px of overhang against a 43px status bar.
-        """
+        """Fit the window inside the work area. A fixed 1280x860 hid the status bar
+        under the taskbar (measured at 1920x1080, 125%)."""
         left, top, area_w, area_h = embed.work_area()
-        # Leave room for the title bar and borders the frame adds around the content.
         chrome_h, chrome_w = 47, 18
         w = max(900, min(want_w, area_w - chrome_w))
         h = max(600, min(want_h, area_h - chrome_h))
@@ -185,7 +135,6 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         y = top + max(0, (area_h - h - chrome_h) // 2)
         return f"{w}x{h}+{x}+{y}"
 
-    # ------------------------------------------------------------------ layout
 
     def _build(self) -> None:
         head = tk.Frame(self.root, bg=config.BG_DARK)
@@ -218,19 +167,12 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         bar = tk.Frame(self.root, bg=config.BG_PANEL)
         bar.pack(fill="x", padx=12, pady=(0, 6))
 
-        # NOT a second address bar. The browser below has a real one that navigates
-        # within a tab; duplicating it would be redundant and slightly dishonest,
-        # because this field cannot navigate an existing tab - doing that would need a
-        # control channel into the browser, and Stage 4 measured that a compromised
-        # browser can reach localhost, so bruhswer refuses to have one (SS25).
-        #
-        # What it CAN do, safely, is hand a URL to the running session as a new tab
-        # using a fixed argv. So it is labelled as exactly that.
+        # Opens a NEW tab. Navigating an existing tab would need a control channel into
+        # the browser, which bruhswer refuses to have.
         tk.Label(bar, text="OPEN IN NEW TAB", font=("Consolas", 8, "bold"),
                  bg=config.BG_PANEL, fg=config.FG_DIM).pack(side="left", padx=(12, 8))
 
-        # The Entry sits inside a padded frame because tk.Entry has no text inset, so
-        # the caret and the placeholder rendered flush against the field's edge.
+        # Padded frame: tk.Entry has no text inset.
         field = tk.Frame(bar, bg=config.BG_RAISED)
         field.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=8)
         self.address = tk.Entry(field, font=("Segoe UI", 11), bd=0,
@@ -241,9 +183,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self.address.bind("<Return>", lambda e: self.on_navigate())
         self.address.insert(0, "Search, or type a web address")
         self.address.bind("<FocusIn>", self.clear_placeholder)
-        # Clicking here must actively TAKE focus back from the hosted browser. With the
-        # input queues attached, a click alone does not move focus, which is why this
-        # field only worked some of the time.
+        # With attached input queues, a click alone does not take focus back.
         self.address.bind("<Button-1>", self._focus_address)
 
         for text, cmd in (("Open", self.on_navigate), ("Blank tab", self.on_new_tab)):
@@ -252,10 +192,8 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
                       activebackground=config.BG_RAISED,
                       command=cmd).pack(side="left", padx=(0, 8), pady=8)
 
-        # Regression banner. Stays up for as long as a control that verified at launch
-        # still does not, INCLUDING after the user dismisses the curtain with "Keep
-        # browsing" - which used to erase every trace of the warning and leave them
-        # browsing a degraded session with a clean-looking window.
+        # Regression banner. Stays up while a control is still failing, even after
+        # "Keep browsing" dismisses the curtain.
         self.regression_banner = tk.Frame(self.root, bg=config.BAD_RED)
         self.regression_text = tk.Label(
             self.regression_banner, text="", font=("Segoe UI", 10, "bold"), anchor="w",
@@ -266,9 +204,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
                   bg=config.BG_PANEL, fg=config.BRAND_WHITE, cursor="hand2",
                   command=self.open_security_panel).pack(side="right", padx=12, pady=8)
 
-        # Account banner. Packed only when a live measurement says an account is
-        # attached; see _refresh_account_banner for why this is state-driven and not
-        # wired to the regression path.
+        # Account banner, shown only while a measurement finds an attached account.
         self.account_banner = tk.Frame(self.root, bg=config.BG_RAISED)
         self.account_banner_text = tk.Label(
             self.account_banner, text="", font=("Segoe UI", 9), anchor="w",
@@ -282,13 +218,10 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
                   command=self.on_open_account_settings).pack(
             side="right", padx=12, pady=8)
 
-        # Where the real Edge window gets hosted.
         self.stage = tk.Frame(self.root, bg="#000000")
         self.stage.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         self.stage.bind("<Configure>", self._fit_hosted)
-        # Clicking anywhere on the page area hands keyboard focus back to the browser.
-        # Tk will happily keep focus on its own address bar otherwise, and the user
-        # ends up typing into a widget that is not the page.
+        # A click on the page area gives keyboard focus back to the browser.
         self.stage.bind("<Button-1>", self._focus_browser)
         self.root.bind("<FocusIn>", self._focus_browser)
 
@@ -314,9 +247,7 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
             self.lights[key] = dot
             self.light_labels[key] = name
 
-        # The panic key's state is PERMANENT chrome, not a status message. It must
-        # still be readable at the moment the user reaches for it, which is long after
-        # any transient line has been overwritten.
+        # Panic key state is permanent chrome, not a status line that gets overwritten.
         self.panic_hint = tk.Label(status, text="", font=("Consolas", 8),
                                    bg=config.BG_PANEL, fg=config.FG_DIM)
         self.panic_hint.pack(side="left", padx=(0, 10))
@@ -330,15 +261,10 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
             self.address.delete(0, "end")
             self._placeholder = False
 
-    # ----------------------------------------------------------------- curtain
 
     def _show_curtain(self, message: str, colour: str,
                       actions: list | None = None) -> None:
-        """Cover the stage with a message, and offer the action it implies.
-
-        Every one of these states used to end in "use the menu", which asks the user
-        to go and find a thing when the window already knows what they need next.
-        """
+        """Cover the stage with a message and buttons for the next action."""
         self.curtain.config(text=f"{config.MOAI}\n\n{message}", fg=colour)
         self.curtain.place(relx=0.5, rely=0.5, anchor="center")
         self.curtain.lift()
@@ -360,14 +286,11 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         self.curtain.place_forget()
         self.curtain_actions.place_forget()
 
-        # The banner deliberately STAYS UP. It is removed only when a later
-        # verification pass actually re-reads the profile and finds no account -
-        # never on the strength of having opened a page the user may not have used.
+        # The banner stays until a later pass finds no account.
 
     def set_status(self, text: str) -> None:
         self.status_text.config(text=text[:110])
 
-    # ----------------------------------------------------------------- actions
 
     def on_navigate(self) -> None:
         text = self.address.get().strip()
@@ -376,21 +299,18 @@ class BrowserWindow(SessionLifecycleMixin, VerificationUIMixin):
         ok, message = self.controller.navigate(text)
         self.set_status(message)
         if not ok:
-            # Leave the text selected so a refused address can be retyped.
             self.address.select_range(0, "end")
 
     def on_new_tab(self) -> None:
         _opened, message = self.controller.new_tab()
         self.set_status(message)
 
-    # ------------------------------------------------------------------ panels
 
     def _panel(self, title: str, width: int = 900, height: int = 660) -> tk.Frame:
         return chrome.scroll_panel(self.root, title, width, height)
 
     def open_security_panel(self) -> None:
-        """A menu item, not a launch gate - but the same 5.5s pass ran synchronously
-        here too, freezing the whole window on a click nobody expected to block."""
+        """Show the checks panel. The pass runs off the Tk thread."""
         session = self.controller.snapshot()
         mode = session.mode if session.active else session_manager.PERSISTENT
         self.set_status("Running security verification...")
