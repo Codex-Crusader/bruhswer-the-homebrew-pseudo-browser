@@ -44,10 +44,10 @@ def _card(body: tk.Misc, item, on_export: Callable, on_delete: Callable) -> None
         fill="x", padx=10, pady=(8, 0))
 
     note = f"{item.size:,} bytes"
-    if item.is_executable_type:
-        note += "   -   this is a program. It is NOT being executed."
+    if item.type_warning:
+        note += f"   -   {item.type_warning}"
     tk.Label(card, text=note, font=("Segoe UI", 8), anchor="w", bg=config.BG_PANEL,
-             fg=config.WARN_AMBER if item.is_executable_type else config.FG_DIM
+             fg=config.WARN_AMBER if item.type_warning else config.FG_DIM
              ).pack(fill="x", padx=10)
 
     # What the BYTES say, on its own line, because it can disagree with the name above.

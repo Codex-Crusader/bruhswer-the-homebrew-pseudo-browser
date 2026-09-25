@@ -40,8 +40,8 @@ before it will let the browser start.
                                     |
                       +-------------v-------------+
                       |   sysquery.py             |
-                      |   the ONLY place an       |
-                      |   external program runs   |
+                      |   read-only queries       |
+                      |   (other callers below)   |
                       +-------------+-------------+
                                     |
                       +-------------v-------------+
@@ -104,11 +104,12 @@ filtering, because filtering is a thing you can get wrong.
 | `privacy/privacy_guard.py` | Did the privacy settings stick? | Writes preferences, then **reads them back**. Chromium reverts some, and that is reported |
 | `host/host_guard.py` | What can other devices on this network reach on this PC? | Detects and explains. Never changes the host by itself |
 | `sessions/session_manager.py` | Persistent or disposable, and is it really gone? | Deletion is verified, confined to its root, and refuses reparse points |
-| `downloads/quarantine.py` | Where do downloads land, and how do they get out? | Filenames rebuilt from scratch; export destination comes only from the user's own folder picker |
+| `downloads/quarantine.py` | Where do downloads land, and how do they get out? | Filenames rebuilt from scratch; export destination comes only from the user's own folder picker. The exported copy carries Mark of the Web (Internet zone), or the export is refused |
 
-### `sysquery.py` - the only external-program boundary
+### `sysquery.py` - the read-only query boundary
 
-Every PowerShell and `icacls` invocation in the application goes through here.
+Most of bruhswer's read-only PowerShell queries go through here. The table below lists
+the modules that run a program directly.
 
 - `subprocess` is always given an **explicit argument list**. `shell=True` appears
   nowhere, enforced by an AST test.
@@ -119,6 +120,31 @@ Every PowerShell and `icacls` invocation in the application goes through here.
 
 There is deliberately no generic `run(command)` function, so no caller can ask this
 module to execute something arbitrary.
+
+`sysquery.py` is not the only place a program runs. Four other modules call
+`subprocess` directly. Each call uses a fixed absolute path from `config.py`, an
+argument list, `shell=False` and `creationflags=NO_WINDOW`. AST tests enforce the
+argument list, the absence of `shell=True` and the `creationflags` for every call in
+`app/`. No test enforces the fixed path. That property is true by reading the code.
+
+| Module | Runs | For |
+|---|---|---|
+| `browser/edge.py` | `msedge.exe` | Launching the session, and opening a URL or the profile settings page in it |
+| `browser/embed.py` | PowerShell | Finding the session's Edge processes, renderers and window |
+| `controller/controller.py` | PowerShell | Stopping this session's Edge processes when it closes |
+| `security/browser_guard.py` | `icacls` | Setting and reading the profile folder's permissions |
+
+These are the values that change from call to call:
+
+- `edge.py` passes `--user-data-dir=<profile path>`, a path bruhswer built, and the
+  URL as its own argument after `urls.py` normalised it.
+- `embed.py` formats the profile folder name into a PowerShell script. It refuses any
+  name that is not letters, digits, `_` and `-`.
+- `controller.py` formats a process ID into a PowerShell script through `int()`.
+- `browser_guard.py` passes the profile path, and the Windows user name inside a
+  `<user>:(OI)(CI)F` grant, each as its own `icacls` argument.
+
+No shell reads any of these, because each call passes an argument list.
 
 ### `config.py` - every constant, no logic
 
@@ -210,7 +236,10 @@ wrong. Measured twice on a fresh profile: without the flag, `account_info=1`, em
 present, `sync_consent=True`; with it, `sync_consent=None`. So it stops the sync. It
 does **not** stop the sign-in - the account record is still written, and no
 command-line switch prevents that. Only machine-wide Edge policy (`BrowserSignin=0`)
-would, and bruhswer refuses to write policy that changes every Edge instance on the PC.
+would, and bruhswer refuses to write Edge policy that changes every Edge profile on the
+PC. The firewall rules are the one exception, and it is deliberate and stated: they
+match the `msedge.exe` path, so every Edge window loses router and LAN access while
+they exist (`LIMITATIONS.md` §14).
 The residual is reported as `NOT ENFORCEABLE` by
 `privacy_guard.verify_account_signin()`, never hidden.
 
@@ -289,7 +318,7 @@ the rest. A security decision made anywhere else is a bug.
 | `security/verifier.py` | The only thing that decides whether the browser may launch |
 | `security/browser_guard.py` | Profile confinement, ACLs, command-line inspection |
 | `network/network_guard.py` | Firewall policy verification |
-| `sysquery.py` | The only place an external program is ever run |
+| `sysquery.py` | Every read-only system query |
 | `browser/edge.py`, `browser/urls.py` | Launch argv construction, URL refusal |
 | `sessions/session_manager.py` | Session destruction, reparse-point handling |
 | `downloads/quarantine.py` | Quarantine paths and export |

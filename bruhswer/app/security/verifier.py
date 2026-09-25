@@ -96,6 +96,14 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
         A guard that raised used to abort the whole pass, costing the user every OTHER
         light including the critical ones. A crash now costs exactly its own checks and
         surfaces as an UNKNOWN naming the guard.
+
+        That UNKNOWN is CRITICAL, for every guard. The checks the guard would have
+        produced are absent, not failed, and blocks_launch() cannot see an absent
+        check - so a non-critical stand-in let a crash in the edge, browser or network
+        guard remove its critical checks and leave may_launch True. Which guards emit
+        critical checks is deliberately not consulted: that would be a second table to
+        keep in step by hand, and a crash is a bruhswer bug, where failing closed is
+        the right cost.
         """
         started = time.perf_counter()
         try:
@@ -103,9 +111,11 @@ def verify_all(profile_dir: Path, argv: list[str], mode: str,
         except Exception as exc:                    # noqa: BLE001  # lint: allow broad-except - one guard must not take down the pass
             _log.exception("guard %s raised; the rest of the pass continues", name)
             produced = [Check(
-                f"{name}.guard", f"{name} checks ran", Verdict.UNKNOWN, critical=False,
+                f"{name}.guard", f"{name} checks could not run", Verdict.UNKNOWN,
+                critical=True,
                 detail=(f"bruhswer's {name} checks could not run, so nothing they "
-                        f"cover was established this pass."),
+                        f"cover was established this pass, and the browser will not "
+                        f"launch until they do."),
                 evidence=f"{exc.__class__.__name__}",
                 evidence_kind=EvidenceKind.INFERENCE,
                 unknown_reason=UnknownReason.PROBE_ERROR)]

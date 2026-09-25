@@ -40,6 +40,29 @@ EXECUTABLE_SUFFIXES = {
     ".reg", ".lnk", ".inf", ".sys", ".scf", ".appx", ".msix",
 }
 
+# NOT programs, so NOT in the set above: that set also decides extension_mismatch, and
+# a PE named "invoice.iso" must keep its mismatch warning. Each of these is a known way
+# to deliver one, so each gets its own warning.
+#
+# Disk images mount as a drive, and Windows versions before the November 2022 update
+# did not pass Mark of the Web to the files inside: the route attackers used to get a
+# program past SmartScreen.
+CONTAINER_SUFFIXES = {".iso", ".img", ".vhd", ".vhdx"}
+
+# Office documents that can run macros, and OneNote files, which can embed a program
+# the user runs with one click.
+ACTIVE_DOCUMENT_SUFFIXES = {
+    ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppsm",
+    ".one", ".onepkg",
+}
+
+_TYPE_WARNINGS: tuple[tuple[set[str], str], ...] = (
+    (EXECUTABLE_SUFFIXES, "this is a program. It is NOT being executed."),
+    (CONTAINER_SUFFIXES, "this is a disk image. Opening it mounts a drive, and the "
+                         "files inside may not be marked as downloaded."),
+    (ACTIVE_DOCUMENT_SUFFIXES, "this document can run macros or embedded programs."),
+)
+
 # --- content sniffing -----------------------------------------------------------
 # An extension is a CLAIM MADE BY THE WEBSITE, and it is all `is_executable_type` has:
 # a PE image named "invoice.pdf" draws no warning from a suffix check. So the first
@@ -110,6 +133,19 @@ class QuarantinedFile:
     def is_executable_type(self) -> bool:
         """The file's NAME claims an executable type. Site-controlled, so weak."""
         return self.path.suffix.lower() in EXECUTABLE_SUFFIXES
+
+    @property
+    def type_warning(self) -> str | None:
+        """What the NAME says this file can do, for the UI, or None.
+
+        The one place both quarantine renderers read, so a new risky type is added
+        once. Site-controlled like is_executable_type; content_note covers the bytes.
+        """
+        suffix = self.path.suffix.lower()
+        for suffixes, warning in _TYPE_WARNINGS:
+            if suffix in suffixes:
+                return warning
+        return None
 
     @property
     def is_executable_content(self) -> bool:
@@ -272,8 +308,49 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         _log.error("export failed: %s", exc.__class__.__name__)
         return False, f"Copy failed: {exc.__class__.__name__}"
 
+    # The copy leaves quarantine only as a file Windows knows came from the internet.
+    # If the mark cannot be written, the copy is removed: an unmarked copy opens with
+    # no SmartScreen or Protected View prompt, and reporting that as an export would be
+    # a green light over a missing control.
+    if not mark_of_the_web(final):
+        try:
+            final.unlink()
+        except OSError as exc:
+            _log.error("unmarked export could not be removed: %s",
+                       exc.__class__.__name__)
+            return False, (f"BRUH. {final.name} was copied, but Windows could not mark "
+                           f"it as downloaded and bruhswer could not remove it. Delete "
+                           f"it before you open it.")
+        _log.error("export refused: destination does not keep Mark of the Web")
+        return False, ("Refused: that folder's drive cannot record that the file came "
+                       "from the internet, so Windows would not warn you when you open "
+                       "it. Export to a folder on an NTFS drive.")
+
     _log.info("exported one quarantined file (%d bytes)", source.stat().st_size)
     return True, f"Exported to {final.name}. bruhswer did not run it."
+
+
+def mark_of_the_web(path: Path) -> bool:
+    """Write Zone.Identifier (Internet zone) on `path`, then read it back.
+
+    True only when the read-back shows the zone bruhswer wrote. Drives without
+    alternate data streams (FAT32, exFAT, some network shares) fail here, and that is
+    reported, not assumed away. Overwrites any stream the copy carried, which also
+    drops the source URL a browser records there.
+    """
+    wanted = f"ZoneId={config.ZONE_ID_INTERNET}"
+    try:
+        # Built from the full path string, NOT path.with_name(): with_name reads the
+        # "a:" of a file called "a" as a drive and raises ValueError (measured, 3.11).
+        stream = Path(f"{path}:{config.ZONE_IDENTIFIER_STREAM}")
+        with stream.open("w", encoding="ascii", newline="\r\n") as handle:
+            handle.write(f"[ZoneTransfer]\n{wanted}\n")
+        with stream.open(encoding="ascii") as handle:
+            written = handle.read().splitlines()
+    except (OSError, ValueError) as exc:
+        _log.error("could not write Mark of the Web: %s", exc.__class__.__name__)
+        return False
+    return wanted in written
 
 
 def delete(item: QuarantinedFile) -> tuple[bool, str]:

@@ -36,6 +36,10 @@ _DISABLE_FEATURES = "--disable-features="
 
 _ALLOWED_NON_HTTP = (BLANK, PROFILES_SETTINGS)
 
+# How much of a certificate subject or issuer goes into a check's evidence. Enough for
+# the CN and O, short enough that one log line stays readable.
+_DN_LOG_CHARS = 80
+
 
 def verify_runtime(edge_path: Path | None) -> list[Check]:
     """Is the browser we are about to launch the one we expect?"""
@@ -71,13 +75,16 @@ def verify_runtime(edge_path: Path | None) -> list[Check]:
 
     status = str(raw.get("Status", ""))
     subject = str(raw.get("Subject", ""))
-    trusted = status == "Valid" and config.EDGE_EXPECTED_SUBJECT_CN in subject
+    issuer = str(raw.get("Issuer", ""))
+    signer = (f"subject={subject[:_DN_LOG_CHARS]} "
+              f"issuer={issuer[:_DN_LOG_CHARS]}")
+    trusted = status == "Valid" and is_microsoft_signer(subject, issuer)
     if trusted:
         checks.append(Check(
             "edge.signature", "Browser is signed by Microsoft", Verdict.PASS,
             critical=True,
             detail=f"Signature {status}, signed by {config.EDGE_EXPECTED_SUBJECT_CN}.",
-            evidence=f"status={status} subject={subject[:80]} {probe.reason()}",
+            evidence=f"status={status} {signer} {probe.reason()}",
             evidence_kind=EvidenceKind.LIVE))
         return checks
 
@@ -99,18 +106,66 @@ def verify_runtime(edge_path: Path | None) -> list[Check]:
                     "way through updating itself, which briefly leaves the program "
                     "file in this state. Wait a minute and check again. If it does "
                     "not clear, do not use this browser."),
-            evidence=f"status={status} subject={subject[:80]} signs={update_signs}",
+            evidence=f"status={status} {signer} signs={update_signs}",
             evidence_kind=EvidenceKind.LIVE,
             # Read, and inconclusive. Different from a query that never completed.
             unknown_reason=UnknownReason.MALFORMED_OUTPUT))
         return checks
 
+    detail = (f"Signature status {status!r}; expected a valid Microsoft signature."
+              if status != "Valid" else
+              "The signature is valid, but the signer is not Microsoft Corporation.")
     checks.append(Check(
         "edge.signature", "Browser is signed by Microsoft", Verdict.FAIL, critical=True,
-        detail=f"Signature status {status!r}; expected a valid Microsoft signature.",
-        evidence=f"status={status} subject={subject[:80]} signs=none",
+        detail=detail,
+        evidence=f"status={status} {signer} signs=none",
         evidence_kind=EvidenceKind.LIVE))
     return checks
+
+
+def dn_fields(dn: str) -> dict[str, list[str]]:
+    """Split a distinguished name as .NET prints it into {attribute: [values]}.
+
+    `CN=Microsoft Corporation, O=Microsoft Corporation, C=US`. A value that holds a
+    comma arrives quoted, `O="Contoso, Ltd"`, with any inner quote doubled. A list per
+    attribute, because an attribute can repeat, and a signer check must see that
+    rather than keep whichever copy came last.
+    """
+    fields: dict[str, list[str]] = {}
+    parts: list[str] = []
+    current: list[str] = []
+    quoted = False
+    i = 0
+    while i < len(dn):
+        char = dn[i]
+        if char == '"':
+            if quoted and dn[i + 1:i + 2] == '"':
+                current.append('"')
+                i += 1
+            else:
+                quoted = not quoted
+        elif char == "," and not quoted:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        i += 1
+    parts.append("".join(current))
+
+    for part in parts:
+        key, sep, value = part.strip().partition("=")
+        if sep:
+            fields.setdefault(key.strip().upper(), []).append(value.strip())
+    return fields
+
+
+def is_microsoft_signer(subject: str, issuer: str) -> bool:
+    """Whole-field comparison of the signer. Each field must appear exactly once."""
+    signer = dn_fields(subject)
+    authority = dn_fields(issuer)
+    return (signer.get("CN") == [config.EDGE_EXPECTED_SUBJECT_CN]
+            and signer.get("O") == [config.EDGE_EXPECTED_SUBJECT_O]
+            and authority.get("O") == [config.EDGE_EXPECTED_ISSUER_O])
 
 
 # "Could not establish", as opposed to "established and it is wrong".

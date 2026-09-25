@@ -1,4 +1,8 @@
-"""The ONLY place bruhswer runs an external program. Read-only queries.
+"""bruhswer's read-only PowerShell queries.
+
+Not the only place a program runs: edge.py, embed.py, controller.py and
+browser_guard.py call subprocess directly, with the same fixed paths, argument lists
+and no shell. docs/ARCHITECTURE.md lists them and the values they format.
 
 Some Windows state - firewall rules, network profile, Defender status - has no usable
 standard-library binding, and adding a dependency for it would grow the trusted stack.
@@ -404,7 +408,8 @@ def authenticode(exe_path: str) -> Probe[dict[str, Any] | None]:
     body = (
         "$s = Get-AuthenticodeSignature -LiteralPath '" + exe_path + "'; "
         "[pscustomobject]@{ Status=[string]$s.Status; "
-        "Subject=[string]$s.SignerCertificate.Subject }"
+        "Subject=[string]$s.SignerCertificate.Subject; "
+        "Issuer=[string]$s.SignerCertificate.Issuer }"
     )
     probe = _run_probe("authenticode", body)
     first = probe.value[0] if probe.value and isinstance(probe.value[0], dict) else None

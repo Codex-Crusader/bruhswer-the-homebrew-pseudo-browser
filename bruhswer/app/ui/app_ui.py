@@ -429,11 +429,11 @@ class BruhswerUI:
                      bg=config.BG_PANEL, fg=config.BRAND_WHITE).pack(
                 fill="x", padx=12, pady=(8, 0))
             note = f"{item.size:,} bytes"
-            if item.is_executable_type:
-                note += "   -   this is a program. It is NOT being executed."
+            if item.type_warning:
+                note += f"   -   {item.type_warning}"
             tk.Label(card, text=note, font=("Segoe UI", 8), anchor="w",
                      bg=config.BG_PANEL,
-                     fg=config.WARN_AMBER if item.is_executable_type else config.FG_DIM
+                     fg=config.WARN_AMBER if item.type_warning else config.FG_DIM
                      ).pack(fill="x", padx=12)
             buttons = tk.Frame(card, bg=config.BG_PANEL)
             buttons.pack(fill="x", padx=12, pady=8)
