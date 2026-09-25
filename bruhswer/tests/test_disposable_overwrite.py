@@ -1,20 +1,7 @@
 """Tests for the pre-delete overwrite pass on disposable sessions.
 
-Two things need proving, and the second matters more than the first:
-
-  1. It works.   Bytes on disk are actually replaced, everywhere in the tree, not just
-                 in a hand-picked list of filenames. A selective pass over Cookies /
-                 Login Data / History would miss the -journal and -wal siblings and the
-                 Local Storage LevelDB directory, and would create a false impression
-                 of coverage.
-  2. It is safe. The pass OPENS FILES FOR WRITING inside a tree, which makes it a
-                 destructive primitive. A junction planted inside the profile must not
-                 redirect it. On Windows a junction is a reparse point that is NOT a
-                 symlink, so Path.is_symlink() is inert against exactly this and the
-                 file-attribute test is what has to fire.
-
-The junction test creates a real junction with mklink /J and is skipped, loudly, if
-that is not possible - a silently-skipped safety test is worse than no test.
+It works on every file in the tree, not a list of names (a list misses -journal
+files). It is safe: a real junction (mklink /J) inside the profile must not redirect it.
 """
 
 from __future__ import annotations
@@ -63,7 +50,7 @@ class TestOverwriteTree(unittest.TestCase):
         (profile / "Default" / "Local Storage" / "leveldb").mkdir(parents=True)
         targets = [
             profile / "Default" / "Cookies",
-            profile / "Default" / "Cookies-journal",      # the sibling a list misses
+            profile / "Default" / "Cookies-journal",
             profile / "Default" / "History",
             profile / "Default" / "History-wal",
             profile / "Default" / "Local Storage" / "leveldb" / "000003.log",
@@ -72,7 +59,6 @@ class TestOverwriteTree(unittest.TestCase):
         for path in targets:
             path.write_bytes(SECRET)
 
-        # protected-access: the overwrite walker is what this suite tests.
         report = session_manager._overwrite_tree(  # lint: allow protected-access
             profile, self.root)
 
@@ -93,13 +79,11 @@ class TestOverwriteTree(unittest.TestCase):
         big = profile / "Cache_Data"
         big.write_bytes(b"x" * (config.DISPOSABLE_OVERWRITE_MAX_BYTES + 1))
 
-        # protected-access: the overwrite walker is what this suite tests.
         report = session_manager._overwrite_tree(  # lint: allow protected-access
             profile, self.root)
 
         self.assertEqual(report.overwritten, 1)
         self.assertEqual(report.skipped_large, 1)
-        # And the user is told, rather than the skip being invisible.
         self.assertIn("too large", report.summary())
         self.assertEqual(big.read_bytes()[:1], b"x", "large file should be untouched")
 
@@ -118,7 +102,6 @@ class TestOverwriteTree(unittest.TestCase):
         profile = self.root / "profile"
         profile.mkdir()
         (profile / "empty").write_bytes(b"")
-        # protected-access: the overwrite walker is what this suite tests.
         report = session_manager._overwrite_tree(  # lint: allow protected-access
             profile, self.root)
         self.assertEqual(report.overwritten, 1)
@@ -156,12 +139,10 @@ class TestOverwriteRefusesReparsePoints(unittest.TestCase):
             self.skipTest("could not create a directory junction with mklink /J; "
                           "this safety test cannot run on this machine")
 
-        # Sanity: the thing Path.is_symlink() gets wrong, pinned so the test is
-        # measuring what it claims to measure.
+        # Path.is_symlink() is False for a junction.
         self.assertFalse(link.is_symlink(),
                          "expected a junction to report is_symlink() == False")
 
-        # protected-access: the overwrite walker is what this suite tests.
         report = session_manager._overwrite_tree(  # lint: allow protected-access
             profile, self.root)
 

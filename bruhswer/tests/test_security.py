@@ -2,11 +2,8 @@
 
     python -m unittest discover -s bruhswer/tests -v
 
-Every test here corresponds to a claim BRUHWSER makes. Brief SS53: claim -> threat ->
-control -> test -> evidence -> verdict. If a test fails, the claim is false, not the
-test.
-
-These run offline and change nothing on the host.
+Each test is a claim bruhswer makes; if it fails, the claim is false. Offline, and
+changes nothing on the host.
 """
 
 from __future__ import annotations
@@ -35,13 +32,8 @@ from app.verdict import Check, Verdict, worst  # noqa: E402
 
 
 class TestNoDangerousPrimitives(unittest.TestCase):
-    """Brief SS15/SS48: these must not exist anywhere in BRUHWSER's own source.
-
-    Parsed with `ast`, not grepped. A text search cannot tell code from a docstring --
-    the first version of this test failed on the sentence in sysquery.py that PROMISES
-    shell=True is never used. It also cannot tell `subprocess.run(argv)` (fine, argv is
-    a list we built) from `subprocess.run("del *")` (not fine). The AST can.
-    """
+    """Dangerous primitives, found with `ast`: grep cannot tell code from docstrings,
+    or run(argv) from run("del *")."""
 
     BANNED_CALLS = {"eval", "exec", "compile", "__import__"}
     BANNED_ATTR_CALLS = {("os", "system"), ("os", "popen"), ("os", "execv"),
@@ -49,8 +41,6 @@ class TestNoDangerousPrimitives(unittest.TestCase):
 
     @staticmethod
     def _sources():
-        # utf-8-sig, because a stray BOM should not stop the security scan from
-        # running. A test that silently skips files is worse than no test.
         for path in (_ROOT / "app").rglob("*.py"):
             yield path, ast.parse(path.read_text(encoding="utf-8-sig"),
                                   filename=str(path))
@@ -101,12 +91,7 @@ class TestNoDangerousPrimitives(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_subprocess_call_hides_its_console_window(self):
-        """bruhswer is a GUI app; helper processes must not flash console windows.
-
-        Reported from real use: startup popped up a stream of black command prompts,
-        one per PowerShell verification query. Every subprocess call in `app/` must pass
-        creationflags (CREATE_NO_WINDOW), and this test fails if a new call site forgets.
-        """
+        """Every subprocess call passes creationflags, or startup flashes consoles."""
         offenders = []
         for path, tree in self._sources():
             for node in ast.walk(tree):
@@ -124,11 +109,8 @@ class TestNoDangerousPrimitives(unittest.TestCase):
                          f"subprocess call without creationflags at {offenders}")
 
     def test_subprocess_first_argument_is_never_a_string(self):
-        """A string first argument is how command injection happens on Windows.
-
-        A variable is acceptable -- BRUHWSER builds those lists itself, and
-        TestBrowserCommandLine covers what goes into them.
-        """
+        """A string first argument is how command injection happens; a variable (a
+        list bruhswer built) is fine."""
         offenders = []
         for path, tree in self._sources():
             for node in ast.walk(tree):
@@ -150,40 +132,18 @@ class TestNoDangerousPrimitives(unittest.TestCase):
 
 
 class TestNoLocalListener(unittest.TestCase):
-    """Brief SS25 and the hardening brief SS6: bruhswer must create NO local endpoint.
+    """bruhswer creates NO local endpoint: a compromised browser can reach any socket
+    or pipe on loopback, and no firewall rule stops it (gate A16)."""
 
-    This is the single most load-bearing structural claim bruhswer makes about its own
-    attack surface. Stage 4 gate A16 measured that Windows Firewall does not filter
-    loopback, so a compromised browser process can reach ANY socket or pipe this
-    process opens, and no rule can stop it. bruhswer therefore does not get to have a
-    localhost control API, a debug server, a DevTools endpoint or an IPC listener - not
-    a hardened one, not a localhost-bound one, not a temporary one.
-
-    The UI and the controller live in one process and call each other directly, so
-    there is nothing for a listener to do. These tests fail if that ever changes.
-    """
-
-    # Modules whose entire purpose is to accept an inbound connection, plus importlib:
-    # importlib.import_module("socket") names a banned module in a string, which this
-    # scan cannot see. __import__ is banned in TestNoDangerousPrimitives for the same
-    # reason.
-    #
-    # A STATIC scan, and it has a known gap: ctypes (used by embed.py, tokens.py and
-    # panic_key.py) can call Winsock directly. The runtime port check in
-    # test_localhost_surface.py is the control that catches a real listener; this one
-    # catches the obvious route early.
+    # Plus importlib, which can name a banned module in a string. Known gap: ctypes can
+    # call Winsock directly; the runtime port check in test_localhost_surface.py is the
+    # real control.
     BANNED_IMPORTS = {"socket", "socketserver", "http.server", "asyncio", "ssl",
                       "xmlrpc.server", "multiprocessing.connection", "wsgiref",
                       "flask", "fastapi", "aiohttp", "tornado", "uvicorn",
                       "websockets", "werkzeug", "importlib"}
 
-    # Calls that open or accept on an endpoint, whatever the module they came from.
-    #
-    # `bind` and `accept` are deliberately NOT in this set: Tk's event system uses
-    # widget.bind("<Return>", ...) all over the UI, and banning the bare name would
-    # make this test fire on ordinary keyboard handling. A test that cries wolf on
-    # every Tk callback gets muted, and then it protects nothing. Socket binds are
-    # caught precisely by test_no_socket_style_bind below instead.
+    # Not `bind`: Tk uses widget.bind everywhere. test_no_socket_style_bind covers it.
     BANNED_ATTRS = {"listen", "create_server", "start_server", "create_connection",
                     "serve_forever", "CreateNamedPipe", "CreateNamedPipeW",
                     "ConnectNamedPipe"}
@@ -204,8 +164,6 @@ class TestNoLocalListener(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     names = [node.module]
                 for name in names:
-                    # Match the module and any parent package, so `import http.server`
-                    # and `from http import server` are both caught.
                     parts = name.split(".")
                     if any(".".join(parts[:i + 1]) in self.BANNED_IMPORTS
                            for i in range(len(parts))):
@@ -228,12 +186,7 @@ class TestNoLocalListener(unittest.TestCase):
         self.assertEqual(offenders, [], f"endpoint call at {offenders}")
 
     def test_no_socket_style_bind(self):
-        """A socket bind is `sock.bind((host, port))` - the argument is an ADDRESS.
-
-        Tk's `widget.bind("<Return>", handler)` takes an event string, so keying on
-        the shape of the first argument separates the two exactly, with no allow-list
-        of widget names to keep up to date.
-        """
+        """A socket bind takes an address tuple; Tk's bind takes an event string."""
         offenders = []
         for path, tree in self._sources():
             for node in ast.walk(tree):
@@ -256,25 +209,19 @@ class TestNoLocalListener(unittest.TestCase):
         self.assertGreaterEqual(len(list(self._sources())), 10)
 
     def test_no_remote_debugging_flag_can_reach_the_browser(self):
-        """The DevTools protocol is the listener bruhswer is most likely to grow.
-
-        --remote-debugging-port opens an UNAUTHENTICATED localhost endpoint that grants
-        full control of the browser to anything that can reach it - and on this
-        platform, a compromised renderer can. It is in DANGEROUS_FLAGS, and
-        edge.build_command refuses it rather than filtering it.
-        """
+        """--remote-debugging-port would open an unauthenticated control endpoint;
+        build_command refuses it."""
         self.assertIn("--remote-debugging-port", config.DANGEROUS_FLAGS)
         self.assertIn("--remote-debugging-pipe", config.DANGEROUS_FLAGS)
         for flag in ("--remote-debugging-port=9222", "--remote-debugging-pipe"):
             with self.assertRaises(ValueError):
                 edge.build_command(Path("msedge.exe"), Path("p"), (flag,))
-        # And none of the flags bruhswer actually ships may open one.
         for flag in config.BASE_EDGE_FLAGS:
             self.assertNotIn("remote-debugging", flag)
 
 
 class TestFilenameSanitisation(unittest.TestCase):
-    """Brief SS36/SS40: a downloaded filename is hostile text, never a path."""
+    """A downloaded filename is hostile text, never a path."""
 
     def test_traversal_is_removed(self):
         for hostile in (r"..\..\..\Windows\System32\evil.exe",
@@ -312,7 +259,7 @@ class TestFilenameSanitisation(unittest.TestCase):
 
 
 class TestBrowserCommandLine(unittest.TestCase):
-    """Brief SS48: BRUHWSER must never start the browser with a weakened sandbox."""
+    """The browser never starts with a weakened sandbox."""
 
     def setUp(self):
         self.edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
@@ -344,15 +291,8 @@ class TestBrowserCommandLine(unittest.TestCase):
 
 
 class TestDownloadDirectoryIsAPreference(unittest.TestCase):
-    """Regression guard for a real bug (brief SS24, SS36).
-
-    bruhswer used to pass `--download-directory=<quarantine>` on the command line.
-    That is NOT a Chromium switch. Edge ignored it silently, downloads went to the
-    user's REAL Downloads folder, and the quarantine feature was a false claim - while
-    every test still passed, because nothing had ever downloaded a file.
-
-    These tests make the failure loud if anyone reintroduces it.
-    """
+    """--download-directory is not a Chromium switch; Edge ignored it and downloads
+    went to the real Downloads folder while every test passed."""
 
     def test_no_fake_download_flag_in_the_launch_command(self):
         controller = ctrl.Controller()
@@ -397,16 +337,8 @@ class TestDownloadDirectoryIsAPreference(unittest.TestCase):
 
 
 class TestBrowserLaunchFlags(unittest.TestCase):
-    """Guards a measured finding about what Edge opens on startup.
-
-    Measured: a fresh profile launched with only --no-first-run --no-default-browser-check
-    ended up showing "Redirecting... and 1 more page" - an ad/redirect tab the user never
-    asked for. Launched with bruhswer's flag set, the same fresh profile showed exactly
-    "about:blank". The difference is the --disable-features list.
-
-    Nothing else in the suite would notice if those flags were dropped, so the browser
-    would quietly start opening unrequested pages again.
-    """
+    """Measured: without the --disable-features list a fresh profile opens an
+    ad/redirect page instead of about:blank."""
 
     def test_startup_noise_suppression_flags_present(self):
         joined = " ".join(config.BASE_EDGE_FLAGS)
@@ -417,14 +349,8 @@ class TestBrowserLaunchFlags(unittest.TestCase):
                       "the measured fix for the unrequested redirect tab")
 
     def test_crash_restore_is_suppressed_by_a_flag_not_a_preference(self):
-        """A crashed session must not silently reopen the previous tabs.
-
-        MEASURED: `session.restore_on_startup` as a preference does NOT stick - Edge
-        rewrote it on all three of three consecutive launches. So the guarantee rests on
-        a launch flag Edge cannot revert, plus a graceful WM_CLOSE that stops the profile
-        being marked crashed in the first place. Asserting the preference here would have
-        been asserting something that does not hold.
-        """
+        """No tab restore after a crash. The preference does not stick (Edge rewrote it
+        3 of 3 launches), so a launch flag does it."""
         self.assertIn("--hide-crash-restore-bubble", config.BASE_EDGE_FLAGS)
         keys = {s.key for s in privacy_guard.STANDARD}
         self.assertNotIn("session.restore_on_startup", keys,
@@ -437,7 +363,7 @@ class TestBrowserLaunchFlags(unittest.TestCase):
 
 
 class TestSessionDestruction(unittest.TestCase):
-    """Brief SS42: never claim a session was destroyed when it was not."""
+    """Never claim a session was destroyed when it was not."""
 
     def test_refuses_path_outside_disposable_root(self):
         rogue = session_manager.Session(
@@ -466,13 +392,8 @@ class TestSessionDestruction(unittest.TestCase):
 
 
 class TestQuarantineFolderNamingHasOneDerivation(unittest.TestCase):
-    """session_manager used to keep its own copy of quarantine's folder-naming logic,
-    justified by a comment claiming a session id is always 16 hex characters. True for
-    disposable sessions, false for the persistent one ("persistent000000") - the two
-    functions produced different folder names for that id, behind a comment asserting
-    they could not. Fixed by importing quarantine.folder_name_for instead of
-    re-deriving it; this pins that there is now exactly one place that name comes from.
-    """
+    """One derivation of the quarantine folder name; a second copy diverged for the
+    persistent session id."""
 
     def test_disposable_id_matches_what_downloads_were_actually_written_under(self):
         session_id = "a" * 16
@@ -481,15 +402,11 @@ class TestQuarantineFolderNamingHasOneDerivation(unittest.TestCase):
             mode=session_manager.DISPOSABLE, session_id=session_id,
             profile_dir=config.PROFILE_DISPOSABLE_ROOT / session_id,
             created=session_manager.datetime.now(session_manager.timezone.utc))
-        # pending_quarantine derives the folder to look in; it must be the same folder
-        # apply_download_directory actually pointed the browser's downloads at.
         session_manager.pending_quarantine(session)  # must not raise on a missing dir
         self.assertEqual(via_quarantine, "a" * 16)
 
     def test_persistent_id_no_longer_diverges(self):
-        """The id that exposed the divergence. Would have been 'ee000000' before the
-        fix - a completely different folder from the one downloads are actually
-        written to."""
+        """The id that diverged ('ee000000' before the fix)."""
         session_id = "persistent000000"
         self.assertEqual(quarantine.folder_name_for(session_id), session_id)
 
@@ -542,13 +459,10 @@ class TestQuarantineExport(unittest.TestCase):
 
 
 class TestExportKeepsMarkOfTheWeb(unittest.TestCase):
-    """An exported copy must still say it came from the internet.
+    """An exported copy keeps Mark of the Web (shutil.copy2 dropped it on 3.11).
 
-    shutil.copy2 dropped the Zone.Identifier stream on Python 3.11 (measured), so
-    SmartScreen and Office Protected View did not engage when the user opened the
-    export. The source here has NO stream, so the test cannot pass by copy2 carrying
-    one, on any Python version. The read-back uses PowerShell, not the Python code
-    that wrote the stream, so the test does not only measure its own writer.
+    The source has no stream, so copy2 cannot pass the test by carrying one, and
+    PowerShell reads it back, not the code that wrote it.
     """
 
     def setUp(self):
@@ -671,20 +585,17 @@ class TestEdgeSignerIsComparedByField(unittest.TestCase):
 
 
 class TestProfileCollisionUsesPathAncestry(unittest.TestCase):
-    """The check used str.startswith, so a sibling directory whose name merely began
-    with the same characters counted as a collision and blocked the launch."""
+    """Ancestry, not str.startswith: a sibling with a prefix name blocked launch."""
 
     def setUp(self):
         self.edge = Path(config.os.environ["LOCALAPPDATA"]) / "Microsoft" / "Edge" / \
             "User Data"
 
     def test_sibling_with_a_prefix_name_is_not_a_collision(self):
-        # protected-access: path-ancestry helper is the unit under test
         self.assertFalse(browser_guard._is_within(  # lint: allow protected-access
             Path(str(self.edge) + "-Evil"), self.edge))
 
     def test_the_directory_itself_is_a_collision(self):
-        # protected-access: the path-ancestry helper is the unit under test.
         self.assertTrue(browser_guard._is_within(  # lint: allow protected-access
             self.edge, self.edge))
 
@@ -693,18 +604,16 @@ class TestProfileCollisionUsesPathAncestry(unittest.TestCase):
             self.edge / "Default", self.edge))
 
     def test_windows_path_case_does_not_defeat_the_check(self):
-        # protected-access: path-ancestry helper is the unit under test
         self.assertTrue(browser_guard._is_within(  # lint: allow protected-access
             Path(str(self.edge).upper()) / "Default", self.edge))
 
     def test_bruhswers_own_profile_is_not_a_collision(self):
-        # protected-access: path-ancestry helper is the unit under test
         self.assertFalse(browser_guard._is_within(  # lint: allow protected-access
             config.PROFILE_PERSISTENT, self.edge))
 
 
 class TestFailClosedSemantics(unittest.TestCase):
-    """Brief SS8: UNKNOWN is never a pass."""
+    """UNKNOWN is never a pass."""
 
     def test_unknown_blocks_launch(self):
         check = Check("t", "t", Verdict.UNKNOWN, "", critical=True)
@@ -740,14 +649,8 @@ class TestFailClosedSemantics(unittest.TestCase):
 
 
 class TestDisposableLeavesNothingBehind(unittest.TestCase):
-    """A disposable session must not leave downloads on disk after it is destroyed.
-
-    REGRESSION. Measured defect: destroy() removed the profile and reported "destroyed
-    and verified gone" while the session's quarantine folder - containing every file
-    downloaded during that session - stayed on disk permanently. sweep_orphans only
-    looked at profiles, and the quarantine panel only lists the CURRENT session, so
-    those files were unreachable from the UI and never cleaned up by anything.
-    """
+    """A destroyed disposable session leaves no downloads. The quarantine once
+    survived a "destroyed and verified gone" report."""
 
     def test_destroy_removes_the_sessions_quarantine(self):
         session = session_manager.create(session_manager.DISPOSABLE)
@@ -764,7 +667,6 @@ class TestDisposableLeavesNothingBehind(unittest.TestCase):
         self.assertFalse(session.profile_dir.exists(), "profile survived")
         self.assertFalse(payload.exists(), "downloaded file survived destruction")
         self.assertFalse(qdir.exists(), "quarantine folder survived destruction")
-        # The user is told what went, rather than left to guess.
         self.assertIn("1 quarantined download", message)
 
     def test_sweep_removes_quarantine_orphaned_by_a_crash(self):
@@ -773,7 +675,6 @@ class TestDisposableLeavesNothingBehind(unittest.TestCase):
         qdir = quarantine.quarantine_dir_for(session.session_id)
         (qdir / "orphan.txt").write_text("x", encoding="utf-8")
 
-        # Simulate a hard kill: the profile vanishes, the quarantine does not.
         shutil.rmtree(session.profile_dir, ignore_errors=True)
         self.assertTrue(qdir.is_dir(), "setup failed")
 
@@ -781,17 +682,8 @@ class TestDisposableLeavesNothingBehind(unittest.TestCase):
         self.assertFalse(qdir.exists(), "orphaned quarantine survived the sweep")
 
     def test_sweep_refuses_to_delete_through_a_junction(self):
-        """A junction planted under the disposable root must not redirect the sweep.
-
-        Found by independent review. `Path.is_dir()` follows a directory junction, so
-        a junction named like a session id looks exactly like an orphaned profile.
-        Anything running as the user - including a compromised browser process - can
-        create one, and following it would turn bruhswer's startup sweep into a
-        delete-anything primitive aimed wherever the junction points.
-
-        Skipped, not silently passed, if the OS will not create a junction: a test
-        that quietly proves nothing is worse than one that says it could not run.
-        """
+        """A junction named like a session id must not turn the sweep into a
+        delete-anything. Skipped, not passed, if no junction can be made."""
         import subprocess as sp
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -841,21 +733,13 @@ class TestConfigSanity(unittest.TestCase):
             self.assertTrue(path.is_relative_to(config.ROOT), str(path))
 
     def test_no_reserved_ipc_surface_remains_in_config(self):
-        """bruhswer must not carry a control-channel it does not implement.
-
-        config.py used to reserve a named pipe and a verb allow-list for a UI-to-
-        controller channel that was never built - the UI and controller share one
-        process and call each other directly. A dormant endpoint name in config is a
-        standing invitation to implement one, and Stage 4 measured that any local
-        endpoint is reachable by a compromised browser process. The names are gone,
-        and this test fails if one comes back.
-        """
+        """No reserved pipe name or verb list for a control channel."""
         for name in ("PIPE_NAME", "ALLOWED_IPC_VERBS", "MAX_IPC_MESSAGE_BYTES"):
             self.assertFalse(hasattr(config, name),
                              f"config.{name} is back; bruhswer has no IPC channel")
 
     def test_cgnat_is_not_blocked(self):
-        """100.64/10 carries some users' only path to the internet (brief SS19)."""
+        """100.64/10 carries some users' only path to the internet."""
         self.assertNotIn("100.64.0.0/10", config.BLOCKED_IPV4)
 
 

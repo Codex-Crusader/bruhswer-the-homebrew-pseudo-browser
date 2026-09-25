@@ -6,12 +6,8 @@
 
 Requires the network policy to be applied.
 
-This drives the actual `BrowserWindow`, not a mock. It pumps the Tk event loop by hand
-instead of calling mainloop() so the workflow can be asserted step by step.
-
-The window-hosting assertion is the interesting one: it checks with the OS that Edge's
-window really is a child of bruhswer's frame, rather than trusting that SetParent was
-called. Same rule as everywhere else in this project - verify the actual state.
+Drives the real BrowserWindow, pumping Tk by hand to assert step by step. Hosting is
+checked with the OS, not assumed from calling SetParent.
 """
 
 from __future__ import annotations
@@ -61,19 +57,10 @@ class _BITMAPINFO(ctypes.Structure):
 
 
 def _distinct_colours(hwnd: int | None, step: int = 17) -> int | None:
-    """Distinct colours sampled from a window's client area, or None if unreadable.
-
-    PrintWindow with PW_RENDERFULLCONTENT asks the window to draw itself into our DC,
-    so this reads what the window renders rather than what happens to be on top of it
-    on screen. That matters: a plain screen grab would pass or fail depending on which
-    window had focus when the suite ran.
-    """
+    """Distinct colours the window draws (PrintWindow, not a screen grab, so focus does
+    not matter), or None if unreadable."""
     if not hwnd:
         return None
-    # ctypes.WinDLL(...) rather than ctypes.windll.X. Identical at runtime, but
-    # `windll` is declared only for win32 in the type stubs, so every checker
-    # reports it as an unresolved reference. The explicit form is also what the
-    # rest of this codebase already uses (see app/browser/embed.py).
     gdi = ctypes.WinDLL("gdi32")
     rect = wt.RECT()
     embed.USER32.GetClientRect(wt.HWND(hwnd), ctypes.byref(rect))
@@ -95,10 +82,7 @@ def _distinct_colours(hwnd: int | None, step: int = 17) -> int | None:
     info.bmiHeader.biBitCount = 32
     info.bmiHeader.biCompression = 0           # BI_RGB
     buf = ctypes.create_string_buffer(width * height * 4)
-    # GetDIBits requires the bitmap NOT be selected into a DC. Leaving it selected
-    # happens to work here, but when GDI does refuse it returns 0 and writes nothing -
-    # and a zero-filled buffer looks exactly like a blank window, which would fail this
-    # assertion for a browser that is painting perfectly.
+    # GetDIBits needs the bitmap deselected; a refusal would look like a blank window.
     gdi.SelectObject(mem, previous)
     got = gdi.GetDIBits(mem, bmp, 0, height, buf, ctypes.byref(info), 0)
 
@@ -113,8 +97,7 @@ def _distinct_colours(hwnd: int | None, step: int = 17) -> int | None:
     gdi.DeleteObject(bmp)
     gdi.DeleteDC(mem)
     embed.USER32.ReleaseDC(wt.HWND(hwnd), src)
-    # None means "could not read", which is NOT the same as "blank" and must never be
-    # reported as a paint failure.
+    # None is "could not read", never "blank".
     if not printed or not got:
         return None
     return len(seen)
@@ -125,9 +108,7 @@ _hits: dict[str, int] = {"page": 0, "file": 0}
 
 class _H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        # Server-side evidence. The window title is a poor signal - Edge overwrites it
-        # with its own UI ("Restore pages", download bubbles), so a title check tests
-        # Edge's chrome rather than whether the page was actually fetched.
+        # Server-side evidence; Edge overwrites the window title with its own UI.
         _hits["file" if self.path.endswith(".txt") else "page"] += 1
         if self.path.endswith(".txt"):
             self.send_response(200)
@@ -223,17 +204,8 @@ def main() -> int:
               "BRUH" in win.session_badge.cget("text"),
               win.session_badge.cget("text"))
 
-        # THE HOSTED WINDOW ACTUALLY PAINTS.
-        #
-        # Everything above proves the window is PARENTED. None of it proves anything is
-        # drawn in it. A completely blank grey stage - which was seen during development
-        # - passed every other assertion in this project, so "the browser is hosted" was
-        # never evidence that the user could see a page.
-        #
-        # Counts distinct colours sampled across the client area. A blank surface is one
-        # or two; a rendered page is hundreds. Threshold is deliberately far below what
-        # any real page produces, so it fails on "nothing rendered", not on "the page is
-        # plain". Stdlib only - GDI through ctypes, no new dependency.
+        # The hosted window actually PAINTS: a blank stage once passed every other
+        # check. Blank is 1-2 colours, a page hundreds; the threshold is far below that.
         colours = _distinct_colours(win.hosted_hwnd)
         check("the hosted window actually paints something",
               colours is not None and colours >= 8,
@@ -243,16 +215,10 @@ def main() -> int:
               "window, but an unreadable check proves nothing and does not pass")
 
     print("\n2b. Renderer sandbox is MEASURED, not asserted")
-    # This check used to be a hardcoded PASS quoting a measurement from one machine.
-    # It must now come from the live renderer tokens, and must say UNKNOWN when there
-    # is nothing running rather than inventing a green light.
     session = win.controller.session
     assert session is not None, "no session while measuring renderers"
     renderers = embed.renderer_pids_for_profile(session.profile_dir)
-    # None means the QUERY failed; [] means it ran and found none. Those became
-    # different return values so that a PowerShell hiccup could stop being reported as
-    # "no browser session is running". `len(None)` would raise here, so the two are
-    # separated before anything counts them.
+    # None = the query failed, [] = none found.
     check("the renderer query itself succeeded", renderers is not None,
           "None = bruhswer could not ask Windows, which is not the same as zero")
     renderers = renderers or []
@@ -289,9 +255,7 @@ def main() -> int:
 
     print("\n5. Security panel opens and reflects real state")
     win.open_security_panel()
-    # open_security_panel() now runs its pass off the Tk thread (was a synchronous
-    # 5.5s freeze); the panel appears only once that pass reports back, so this waits
-    # for it rather than pumping a fixed, shorter duration.
+    # The pass runs off the Tk thread; wait for the panel, not a fixed time.
     opened = pump_until(win, lambda: len(win.root.winfo_children()) > 0, 15)
     check("BRUH panel opened", opened)
     check("localhost light is amber, never green",

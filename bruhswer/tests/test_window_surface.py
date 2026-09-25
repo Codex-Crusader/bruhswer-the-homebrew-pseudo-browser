@@ -1,15 +1,7 @@
 """BrowserWindow was split into three files. These pin what the split must preserve.
 
-Two failure modes, both silent:
-
-  1. A mixin uses `self.something` that nothing provides. At runtime that is an
-     AttributeError on a teardown path nobody exercises; statically it is one more
-     warning in a list of 149, where a real typo is invisible.
-  2. A WindowShell stub survives onto the assembled class - a method that raises
-     NotImplementedError sitting where a real implementation was supposed to be.
-
-The suites drive the window end to end and would eventually catch some of this. These
-catch all of it, in milliseconds, without a browser.
+Every `self.x` a mixin uses resolves, and no WindowShell stub survives on the
+assembled class. No browser needed.
 """
 
 from __future__ import annotations
@@ -30,8 +22,7 @@ from app.ui.window_shell import WindowShell  # noqa: E402
 
 _UI = _ROOT / "app" / "ui"
 
-# The surface tests/test_browser_ui.py and tests/test_user_path.py drive. Splitting the
-# class must not move any of it off BrowserWindow.
+# What test_browser_ui.py and test_user_path.py drive on BrowserWindow.
 PUBLIC_SURFACE = (
     "root", "result", "hosted_hwnd", "stage", "session_badge", "controller",
     "address", "lights", "clear_placeholder", "on_navigate", "on_new_tab",
@@ -88,8 +79,7 @@ class TestEverySelfReferenceResolves(unittest.TestCase):
 class TestNoStubSurvives(unittest.TestCase):
     """A WindowShell method still bound on BrowserWindow was never implemented."""
 
-    # WindowShell's own helper, used BY the stubs. Not itself a stub, so nothing
-    # overrides it and it must not be counted as a survivor.
+    # A helper the stubs use, not a stub.
     HELPERS = {"_unimplemented"}
 
     def test_every_shell_method_is_overridden(self):

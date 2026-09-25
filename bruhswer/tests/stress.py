@@ -4,15 +4,8 @@
     python tests/stress.py 3
     python tests/stress.py 10 --fast  # skip the suites that drive a real browser
 
-WHY THIS EXISTS SEPARATELY FROM run_all.py
-    run_all answers "does the suite pass". This answers "does it pass RELIABLY", and
-    they are different questions on Windows. These suites start PowerShell processes,
-    reparent a real Edge window, and race a compositor. A control that passes nine times
-    in ten is not a control that passes - the tenth run is the user's session.
-
-    A suite that fails intermittently is reported by NAME and by how often, so an
-    intermittent failure cannot be dismissed as "it passed when I ran it again". That
-    dismissal is exactly how a real defect survives.
+run_all asks "does it pass"; this asks "does it pass reliably", naming each flaky
+suite and how often it failed.
 
 Exit codes: 0 every iteration passed. 1 something failed at least once.
 """

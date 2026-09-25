@@ -2,18 +2,10 @@
 
     python tools\\verify_install.py ..\\installer\\Output\\bruhswer-<version>-setup.exe
 
-Per-user, no Administrator, and it uninstalls what it installs. Run it on a machine
-with no existing bruhswer install - it refuses to start if one is present, because
-uninstalling somebody's real installation to satisfy a checklist would be rude.
-
-A script because the manual version left eight unticked boxes in 0.9.1, and the first
-automated attempt PASSED its "no tests/ in the install" assertions while looking at a
-directory the installer never writes to - the application is nested under
-{app}\\bruhswer. A check that passes because it looked in the wrong place is worse than
-no check, so the layout is asserted explicitly below.
-
-It still does not prove the prerequisite refusals: it runs on a machine that already has
-Python and Edge. Those need a clean Windows image and are still unverified.
+Per-user, no Administrator. Refuses to start if bruhswer is already installed. The
+install layout ({app}\\bruhswer) is asserted, because an early version checked the
+wrong folder and passed. Prerequisite refusals need a clean Windows image and are
+not covered.
 """
 
 from __future__ import annotations
@@ -56,11 +48,8 @@ def uninstall_entries() -> list[str]:
 
 
 def _data_census() -> dict[str, tuple[int, int]]:
-    """subfolder -> (file count, total bytes) under the user's bruhswer data.
-
-    Taken before the install and again after the uninstall. Comparing the two is the
-    only way this script can tell "left alone" from "deleted"; see the note in step 8.
-    """
+    """subfolder -> (file count, total bytes) of the user's bruhswer data, taken
+    before install and after uninstall."""
     out: dict[str, tuple[int, int]] = {}
     for name in ("profiles", "quarantine", "logs", "state"):
         folder = USER_DATA / name
@@ -73,12 +62,8 @@ def _data_census() -> dict[str, tuple[int, int]]:
 
 
 def _system_changes_present() -> bool:
-    """Does this PC still carry a bruhswer change that outlives the uninstall?
-
-    The same two things the uninstaller looks for: its firewall rules, and a Host Guard
-    rollback record. Checked from here independently, so step 9 is asserting against
-    the machine rather than trusting the uninstaller's own opinion of it.
-    """
+    """Firewall rules or a Host Guard rollback record still present, checked
+    independently of the uninstaller."""
     if (USER_DATA / "state" / "hostguard-rollback.json").is_file():
         return True
     probe = subprocess.run(
@@ -91,20 +76,8 @@ def _system_changes_present() -> bool:
 
 
 def _backup_user_data() -> Path | None:
-    """Copy the user's bruhswer data aside before anything destructive runs.
-
-    THIS SCRIPT UNINSTALLS FOR REAL, against the real %LOCALAPPDATA%\\BRUHWSER, and
-    redirecting the environment does not move it - Inno resolves {localappdata} from
-    the shell folder. So the only place a guard can live is here.
-
-    Needed because it already happened: during 0.11.0's verification the silent
-    uninstall deleted a 110 MB persistent profile, the quarantine and the logs, and the
-    script reported user data had been left alone. The uninstaller no longer does that,
-    but a tool that destroys real data when one line of Pascal is wrong should not rely
-    on that line staying right.
-
-    Returns the backup location, or None if there was nothing to copy.
-    """
+    """Back up the REAL %LOCALAPPDATA%\\BRUHWSER first: the uninstall is real, and in
+    0.11.0 it deleted a 110 MB profile. Returns the backup path, or None."""
     if not USER_DATA.is_dir() or not any(USER_DATA.iterdir()):
         return None
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -127,8 +100,6 @@ def main(setup: Path) -> int:
           or not any(USER_DATA.iterdir()),
           str(backup) if backup else "no existing user data")
 
-    # BEFORE anything runs. This script installs and then uninstalls, and the uninstall
-    # is the step that can destroy a real profile.
     before = _data_census()
 
     print("1. Pre-install state")
@@ -154,11 +125,7 @@ def main(setup: Path) -> int:
     check("uninstaller present",
           (APP / "uninstall").is_dir() or any(APP.glob("unins*.exe")))
 
-    # The only place that looks at a REAL install, and the failure is silent: if the
-    # .iss stops shipping non-.py files under app\, every installed copy reports "no
-    # manifest shipped" and the drift check does nothing, while the unit suite passes
-    # in the dev tree where the manifest is always present. Checked for FRESHNESS too -
-    # regenerating must be the LAST build step, or a good install reports FAIL.
+    # The only check on a REAL install that the manifest shipped and is fresh.
     manifest = PKG / "app" / "security" / "MANIFEST.sha256"
     check("file manifest shipped", manifest.is_file(), str(manifest))
 
@@ -191,8 +158,7 @@ def main(setup: Path) -> int:
     probe = subprocess.run([sys.executable, str(PKG / "bruhswer.py"), "--check"],
                            capture_output=True, text=True, cwd=str(PKG),
                            env=dict(os.environ, PYTHONIOENCODING="utf-8"), timeout=300)
-    # A non-zero exit is a legitimate "launch blocked" verdict. Only the absence of the
-    # report means the installed copy could not run at all.
+    # A non-zero exit is a legitimate verdict; only a missing report is a failure.
     check("installed app produced its report", "BRUH CHECK" in (probe.stdout or ""),
           f"exit={probe.returncode}, non-zero can be a correct blocked verdict")
 
@@ -213,35 +179,21 @@ def main(setup: Path) -> int:
 
     print("\n8. User data untouched")
     after = _data_census()
-    # PER-FOLDER, not `USER_DATA.exists()`. That is what this used to assert, and it
-    # cannot fail: the uninstaller deliberately KEEPS state\ so the Host Guard rollback
-    # record survives, so the root directory always exists afterwards. It printed
-    # "user data left alone, not silently deleted" during 0.11.0's verification run
-    # while a 110 MB persistent profile, the quarantine and the logs had just been
-    # deleted by the silent uninstall.
-    #
-    # A check that cannot fail is worse than no check: it is a green light nobody
-    # measured, which is the one defect class this project treats as a vulnerability.
+    # Per folder: the root always survives (state\ is kept), so checking it alone
+    # passed while a 110 MB profile was deleted.
     for name in ("profiles", "quarantine", "state"):
         was, now = before.get(name), after.get(name)
         check(f"{name}/ unchanged by install and uninstall", was == now,
               f"before={was} after={now}")
 
-    # logs/ is the one folder that legitimately GROWS: step 5 runs the installed copy
-    # with --check, and bruhswer logs what it did. So the assertion is that nothing was
-    # REMOVED, which is the property being defended, rather than exact equality - which
-    # would fail on every run and get relaxed to something meaningless.
+    # Nothing REMOVED; logs/ legitimately grows from step 5's --check.
     was_logs, now_logs = before.get("logs", (0, 0)), after.get("logs", (0, 0))
     check("logs/ not deleted (may grow; the installed app ran)",
           now_logs[0] >= was_logs[0] and now_logs[1] >= was_logs[1],
           f"before={was_logs} after={now_logs}")
 
     print("\n9. Cleanup instructions for the system-wide changes")
-    # The firewall rules and any Host Guard change OUTLIVE the uninstall, and the
-    # scripts that undo them ship under the install folder, which the uninstall
-    # deletes. So the uninstaller copies them somewhere that survives. If it stops
-    # doing that, the advice it prints points at files that are gone - which is what it
-    # did before 0.11.0, and the kind of thing nobody notices until they follow it.
+    # The undo scripts must survive the uninstall, which deletes the install folder.
     expect_kit = _system_changes_present()
     kit = USER_DATA / "cleanup"
     if not expect_kit:
@@ -255,8 +207,6 @@ def main(setup: Path) -> int:
         guide = kit / "HOW-TO-CLEAN-UP.txt"
         if guide.is_file():
             text = guide.read_text(encoding="utf-8", errors="replace")
-            # The whole point is that the paths RESOLVE. A guide naming a script that
-            # is not beside it is the defect, not the fix.
             check("  guide names only scripts that are actually there",
                   all((kit / s).is_file() for s in
                       ("bruhswer-netpolicy.ps1", "bruhswer-hostguard.ps1")
@@ -267,9 +217,7 @@ def main(setup: Path) -> int:
     print(f"{sum(_results)} passed, {failed} failed")
 
     if backup is not None:
-        # KEPT, not deleted, and its location printed either way. If step 8 failed then
-        # this copy is the only remaining record of the user's profile, and deleting it
-        # to tidy up would destroy the evidence that the check just caught something.
+        # Kept: if step 8 failed, it is the only copy of the user's profile.
         print(f"\nUser data backup kept at:\n  {backup}")
         if failed:
             print("Step 8 reported a change. RESTORE FROM THE BACKUP ABOVE before "

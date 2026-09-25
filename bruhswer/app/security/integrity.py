@@ -1,21 +1,10 @@
 """Do bruhswer's own files still match the manifest they shipped with?
 
-INSTALLATION-DRIFT DETECTION: a half-finished copy, a file truncated by a disk error,
-a partial upgrade that mixed two versions, untargeted malware that rewrites .py files.
+Drift detection (a bad copy, a partial upgrade), NOT tamper protection: whoever can
+edit the code can edit the manifest beside it. Hence non-critical.
 
-It does NOT detect a targeted attacker, and nothing here may be worded as if it does.
-The manifest sits beside the code it describes, and the code that reads it beside both,
-so anyone who can edit `verifier.py` can edit `MANIFEST.sha256` and this file in the
-same motion. That is the ceiling of any self-check with no trust anchor outside the
-thing being checked. Hence the verdict is NON-CRITICAL: the failure it most likely
-represents is a bad copy, not an intrusion.
-
-Every module under `app/` is imported into the same process with the same privileges,
-so hashing a hand-picked "TCB" subset would be a green light over a fraction of what
-runs. Covered: `bruhswer.py` and `app/**/*.py`, with a .py file present on disk but
-absent from the manifest counted as a mismatch - otherwise adding a file is the way
-past the check. NOT covered: `tests/`, `tools/`, the interpreter, the standard library
-and every DLL loaded. So this is not "the install is intact".
+Covers bruhswer.py and app/**/*.py; an unlisted .py counts as a mismatch. Not tests/,
+tools/, the interpreter or the standard library.
 """
 
 from __future__ import annotations
@@ -30,22 +19,14 @@ from ..verdict import Check, EvidenceKind, UnknownReason, Verdict
 
 _log = get_logger("integrity")
 
-# The manifest covers app/**/*.py AND bruhswer.py: the entry point is the first code
-# that runs, so leaving it unhashed would be an unchecked hole at the most load-bearing
-# file in the install.
 APP_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = APP_ROOT.parent
 
-# Lives beside the code it describes. Named .sha256 rather than .py so that the glob
-# can never pick up the manifest as one of its own inputs.
+# Not .py, so the source glob never includes the manifest.
 MANIFEST_PATH = APP_ROOT / "security" / "MANIFEST.sha256"
 
-# Cache and build artefacts are not source and are not shipped.
 _EXCLUDED_DIRS = ("__pycache__",)
 
-# Not part of what runs when a user launches bruhswer: the regression suite and the
-# build-time utilities. Excluded so that running the tests, or regenerating a manifest,
-# does not report drift in a perfectly good install.
 _EXCLUDED_TOP_LEVEL = ("tests", "tools")
 
 
@@ -56,15 +37,10 @@ class IntegrityReport:
     changed: tuple[str, ...] = field(default_factory=tuple)
     missing: tuple[str, ...] = field(default_factory=tuple)
     unexpected: tuple[str, ...] = field(default_factory=tuple)
-    # Listed, present, and could NOT be read. A separate bucket from `missing`: "the
-    # file is gone" is a finding, "could not open it" is a failed measurement. Drives
-    # UNKNOWN, not FAIL.
+    # Present but unreadable: UNKNOWN, not FAIL.
     unreadable: tuple[str, ...] = field(default_factory=tuple)
     manifest_present: bool = True
-    # The manifest is THERE and unusable - unreadable, not UTF-8, or parsing to
-    # nothing. `manifest_present` is False for this too, but the facts differ: an
-    # absent manifest is normal in a source checkout, a ruined one in an install is a
-    # finding, and the check must not explain the second away as the first.
+    # Present but unusable, which is a finding; an absent one is normal in a checkout.
     manifest_unreadable: bool = False
 
     @property
@@ -74,7 +50,7 @@ class IntegrityReport:
 
     @property
     def inconclusive(self) -> bool:
-        """Could not finish looking. Never a PASS, and not a FAIL either."""
+        """Could not finish looking: neither PASS nor FAIL."""
         return bool(self.unreadable) and not (self.changed or self.missing
                                               or self.unexpected)
 
@@ -98,18 +74,13 @@ def _iter_sources(root: Path) -> list[Path]:
 
 
 def _relative_key(path: Path, root: Path) -> str:
-    """Posix-style relative path, so a manifest is identical on every machine."""
+    """Posix-style relative path."""
     return path.relative_to(root).as_posix()
 
 
 def hash_file(path: Path) -> str | None:
-    """SHA-256 of one source file, with line endings normalised. None if unreadable.
-
-    Measured: git stores LF and checks CRLF out here, so hashing raw bytes would make
-    every fresh clone report FAIL on a perfectly good copy. Hashing CONTENT still
-    detects a changed byte, a truncation or an inserted line; it deliberately does not
-    detect a pure line-ending conversion, which is not a change to the code.
-    """
+    """SHA-256 with line endings normalised, None if unreadable. Raw bytes differed on
+    every CRLF checkout (measured)."""
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
@@ -119,8 +90,7 @@ def hash_file(path: Path) -> str | None:
                 if not chunk:
                     break
                 chunk = trailing_cr + chunk
-                # A chunk boundary can fall between CR and LF. Hold a trailing CR back
-                # so the pair is normalised as one, rather than surviving as a lone CR.
+                # A chunk boundary can split a CR from its LF.
                 trailing_cr = b""
                 if chunk.endswith(b"\r"):
                     chunk, trailing_cr = chunk[:-1], b"\r"
@@ -143,16 +113,12 @@ def build_manifest(root: Path = PACKAGE_ROOT) -> dict[str, str]:
 
 
 def format_manifest(manifest: dict[str, str]) -> str:
-    """`<sha256>  <path>` lines, sorted, LF endings - stable across regenerations."""
+    """`<sha256>  <path>` lines, sorted, LF endings."""
     return "".join(f"{digest}  {key}\n" for key, digest in sorted(manifest.items()))
 
 
 def parse_manifest(text: str) -> dict[str, str]:
-    """Read a manifest back. Malformed lines are ignored rather than raising.
-
-    A corrupt manifest surfaces as a pile of missing/changed entries, which is a far
-    more useful report than an exception during startup verification.
-    """
+    """Read a manifest back, ignoring malformed lines."""
     manifest: dict[str, str] = {}
     for line in text.splitlines():
         stripped = line.strip()
@@ -171,8 +137,7 @@ def check_tree(root: Path = PACKAGE_ROOT,
     try:
         recorded = parse_manifest(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
-        # UnicodeDecodeError is NOT an OSError: a non-UTF-8 manifest used to escape
-        # this handler and raise out of startup verification.
+        # UnicodeDecodeError is not an OSError.
         return IntegrityReport(manifest_present=False,
                                manifest_unreadable=manifest_path.exists())
 
@@ -193,16 +158,13 @@ def check_tree(root: Path = PACKAGE_ROOT,
             continue
         actual = hash_file(path)
         if actual is None:
-            # Exists, but could not be opened - a lock, an ACL, a bad sector. That is
-            # a measurement that did not complete, not evidence the file is wrong.
             unreadable.append(key)
         elif actual != expected:
             changed.append(key)
         else:
             matched += 1
 
-    # A .py file on disk that the manifest does not list. Counted, because otherwise
-    # dropping in a new module would be the trivial way past this check.
+    # Unlisted files count, or adding a module would bypass the check.
     unexpected = sorted(set(on_disk) - set(recorded))
 
     return IntegrityReport(
@@ -211,17 +173,12 @@ def check_tree(root: Path = PACKAGE_ROOT,
         unreadable=tuple(unreadable))
 
 
-# NOT "self-integrity", "tamper protection" or "installation is trusted": each of those
-# names promises attacker resistance this check cannot have, and titles are what people
-# actually read. What it honestly says is narrower and still useful.
+# Worded so it promises no attacker resistance.
 _TITLE = "Installed files match their manifest"
 
 
 def verify() -> list[Check]:
-    """The `controller.integrity` check.
-
-    Non-critical by design - see the module docstring.
-    """
+    """The non-critical `controller.integrity` check."""
     report = check_tree()
 
     if report.manifest_unreadable:

@@ -1,16 +1,5 @@
-"""The state and the cross-half calls that BrowserWindow's two mixins share.
-
-browser_window.py is split three ways - layout/actions in BrowserWindow, startup and
-teardown in session_lifecycle.py, verification display in verification_ui.py - and the
-halves are mixins woven into one object, so they freely use `self.root`,
-`self.controller` and `self.set_status(...)` without ever declaring them. That works at
-runtime and left 149 unresolved references to static checkers, which is the noise a
-genuine typo in a teardown path would have hidden in.
-
-The stubs raise rather than returning None so a half-wired mixin cannot fail silently.
-Every one is overridden, and tests/test_window_surface.py asserts none survives on the
-assembled class.
-"""
+"""Declares the state and methods BrowserWindow's mixins share, for static checkers.
+Stubs raise; a test asserts none survives on the assembled class."""
 
 from __future__ import annotations
 

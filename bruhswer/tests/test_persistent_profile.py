@@ -1,19 +1,8 @@
 """Does the PERSISTENT profile survive a second launch?
 
-This is the mode intended for daily use, and it has a failure mode the disposable mode
-cannot have. Privacy preferences are written BEFORE the browser starts. A disposable
-profile is always a fresh empty directory, so that write always wins. A persistent
-profile already contains a `Preferences` file that Chromium itself wrote on the
-previous shutdown -- and Chromium rewrites that file when it exits.
-
-If Edge's shutdown write wins, `privacy.settings` degrades to FAIL on every launch
-after the first, on the mode people actually use. A status indicator that silently goes
-wrong on the common path is exactly the defect this project treats as a vulnerability.
-
-So: start persistent, close, start persistent again, read the file back.
-
-Also checks that repeatedly hardening a POPULATED profile directory is idempotent --
-the ACL code has only ever been proven against an empty one.
+Chromium rewrites Preferences on exit, which could undo the privacy settings on every
+launch after the first. Start, close, start again, read back. Also: hardening a
+populated profile twice is idempotent.
 
     python tests/test_persistent_profile.py
 """
@@ -49,8 +38,6 @@ def one_cycle(controller: ctrl.Controller, label: str) -> tuple[int, int, list[s
     if not outcome.launched:
         return 0, 0, ["launch blocked"]
 
-    # Let Edge fully start, settle, and then shut down -- the shutdown write is the
-    # event this test exists to catch.
     time.sleep(12)
     ok, message = controller.stop()
     check(f"{label}: session closed", ok, message)
@@ -65,7 +52,6 @@ def main() -> int:
     print("BRUHWSER persistent-profile verification")
     print("=" * 74)
 
-    # Start from a clean slate so the result is unambiguous.
     if config.PROFILE_PERSISTENT.exists():
         print("\n[setup] removing existing persistent profile for a clean test")
         shutil.rmtree(config.PROFILE_PERSISTENT, ignore_errors=True)

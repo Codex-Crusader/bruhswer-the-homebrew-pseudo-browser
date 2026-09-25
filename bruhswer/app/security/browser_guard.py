@@ -1,12 +1,7 @@
-"""BrowserGuard - the browser's own data stays where bruhswer put it.
+"""BrowserGuard: the browser's data stays in bruhswer's own, ACL-tightened profile.
 
-A dedicated, ACL-tightened profile directory keeps bruhswer's browsing state out of the
-user's ordinary Edge/Chrome profiles and out of their documents. That is real and worth
-doing.
-
-It is NOT a sandbox. Gate A4 measured that the browser PROCESS runs on an ordinary user
-token and can read the whole user profile regardless of where its own data lives. This
-is hygiene and defence in depth, and the UI must never present it as confinement.
+Not a sandbox: the browser process runs on the user's token and can read the whole
+user profile (gate A4).
 """
 
 from __future__ import annotations
@@ -25,20 +20,8 @@ _log = get_logger("browserguard")
 
 
 def harden_profile_dir(profile_dir: Path) -> tuple[bool, str]:
-    """Restrict the profile folder to this user, removing inherited access.
-
-    NO `/T`, and that is not a style choice. `/inheritance:r` with `/T` applies the
-    grant to every existing FILE, where the container-inheritance `(OI)(CI)` flags are
-    inherit-only - so each file lost its inherited access and gained nothing. icacls
-    returned 0 while the profile became unreadable and Preferences raised
-    PermissionError.
-
-    The DIRECTORY alone is correct and sufficient: Windows propagates (OI)(CI) entries
-    to children that inherit, and new files pick them up automatically.
-
-    icacls gets an explicit argument list with no shell. The only substituted value is
-    the profile path, which bruhswer built from config constants.
-    """
+    """Restrict the profile folder to this user. No `/T`: with it, icacls returned 0
+    while every file lost access. The folder's (OI)(CI) grant reaches children anyway."""
     profile_dir.mkdir(parents=True, exist_ok=True)
     user = getpass.getuser()
     try:
@@ -55,8 +38,7 @@ def harden_profile_dir(profile_dir: Path) -> tuple[bool, str]:
     if proc.returncode != 0:
         return False, "ACL hardening reported errors."
 
-    # Prove the profile is still usable. icacls returning 0 is NOT evidence that the
-    # result is correct - that is exactly how the bug above went unnoticed.
+    # icacls returning 0 is not proof; read the profile back.
     ok, detail = _profile_is_readable(profile_dir)
     if not ok:
         return False, f"ACL hardening left the profile unusable: {detail}"
@@ -94,13 +76,8 @@ def _read_acl(profile_dir: Path) -> str:
 
 
 def _is_within(candidate: Path, ancestor: Path) -> bool:
-    """True if candidate is ancestor or sits under it.
-
-    BOTH sides are resolved. Resolving only the candidate meant an 8.3 short path or a
-    junction on AppData\\Local would never match, and this critical check would PASS for
-    a profile that IS the user's real browser data. Lowered too, because Windows paths
-    are case-insensitive and is_relative_to is not.
-    """
+    """True if candidate is ancestor or under it. Both sides resolved (8.3 names,
+    junctions) and lowered (Windows paths are case-insensitive)."""
     try:
         here = Path(str(_resolved(candidate)).lower())
         there = Path(str(_resolved(ancestor)).lower())
@@ -142,8 +119,7 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
         local_appdata / "Microsoft" / "Edge" / "User Data",
         local_appdata / "Google" / "Chrome" / "User Data",
     ]
-    # Path ancestry, not string prefix. "User Data-Evil" starts with "User Data" while
-    # being a different directory, which made this fail a launch it should have allowed.
+    # Ancestry, not string prefix: "User Data-Evil" starts with "User Data".
     collides = any(_is_within(resolved, p) for p in forbidden_parents)
     checks.append(Check(
         "browser.profile.separate", "Separate from your normal browser profile",
@@ -186,8 +162,7 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
                 if not found_dangerous else
                 f"Refusing these flags: {found_dangerous}"),
         evidence=f"dangerous={found_dangerous}",
-        # INFERENCE: this inspects the argv bruhswer just built, and asks Windows
-        # nothing. It still catches a code change adding a dangerous flag.
+        # INFERENCE: inspects the argv bruhswer built; asks Windows nothing.
         evidence_kind=EvidenceKind.INFERENCE))
 
     profile_flags = [a for a in argv if a.startswith("--user-data-dir=")]
@@ -219,18 +194,8 @@ def verify(profile_dir: Path, argv: list[str]) -> list[Check]:
 
 def verify_renderer_sandbox(
         renderer_pids: Sequence[int] | None) -> list[Check]:
-    """MEASURE the renderer sandbox, rather than asserting it.
-
-    This used to be a hardcoded PASS quoting one measurement on one machine with one
-    Edge build. On that same machine Chrome's renderers were restricted but NOT
-    AppContainer, so the property is genuinely build-dependent. With no session running
-    there is nothing to measure and the honest answer is UNKNOWN.
-    """
-    # Three situations, three messages; they used to share one.
-    #   None   the query failed. "No browser session is running" is then a false
-    #          statement, and the one the user is most likely to see while browsing.
-    #   []     the query succeeded and there are genuinely no renderers.
-    #   [...]  measure them.
+    """Measure the renderers' tokens; the sandbox is build-dependent. None = the query
+    failed, [] = no renderers, otherwise measure them."""
     if renderer_pids is None:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,
@@ -266,13 +231,8 @@ def verify_renderer_sandbox(
     contained = facts["untrusted"]
     appcontainer = facts["appcontainer"]
 
-    # A renderer whose token could not be read is NOT evidence of containment, and it
-    # must not be quietly dropped from the denominator. Doing exactly that is what let
-    # this check report "All 2 renderer process(es) run at UNTRUSTED integrity" while a
-    # third renderer ran unmeasured -- see summarise_renderers for the measurement.
-    #
-    # Ordered before the PASS branch on purpose: partial evidence is UNKNOWN, and
-    # UNKNOWN is an acceptable answer here. Rounding it up to PASS is not.
+    # Before the PASS branch: an unreadable renderer is UNKNOWN, never dropped from
+    # the count (that once reported "All 2" of 3).
     if unreadable:
         return [Check(
             "browser.sandbox", "Renderer sandbox (measured)", Verdict.UNKNOWN,

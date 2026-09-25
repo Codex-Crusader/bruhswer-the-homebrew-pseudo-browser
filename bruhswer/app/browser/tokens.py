@@ -1,13 +1,5 @@
-"""Measure the browser's actual process tokens, on THIS machine, right now.
-
-The sandbox status used to be a hardcoded PASS quoting one measurement on one machine
-with one Edge build. A different Edge version, a policy or a Chromium change could move
-that line while the green light stayed up, so it is measured from the live process tree
-instead and reported UNKNOWN when there is nothing running to measure.
-
-Read-only. Opens tokens with the minimum access needed to read their properties, and
-never touches a process it did not launch.
-"""
+"""Read the browser's live process tokens. Read-only, with minimum access; the sandbox
+varies by Edge build, so it is measured, never assumed."""
 
 from __future__ import annotations
 
@@ -68,12 +60,8 @@ class TokenFacts:
 
 
 def _token_info(token: wt.HANDLE, info_class: int):
-    """Return the ctypes BUFFER, never a copy of its bytes.
-
-    TOKEN_MANDATORY_LABEL holds a POINTER to a SID inside this buffer. Casting a
-    `buf.raw[:n]` copy back to the struct left that pointer aimed at memory Python had
-    already freed, and reading the integrity level crashed with an access violation.
-    """
+    """Return the ctypes buffer itself: the label's SID pointer points into it, and a
+    copy left it dangling (access violation)."""
     need = wt.DWORD(0)
     ADVAPI32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(need))
     if not need.value:
@@ -132,14 +120,8 @@ def read(pid: int) -> TokenFacts:
 
 
 def summarise_renderers(renderer_pids: Sequence[int]) -> dict:
-    """What is actually true of this session's renderer processes right now.
-
-    `unreadable` is part of the answer. Returning only readable tokens let the caller
-    compare `untrusted == measured` and go green on 2 of 3 renderers, reporting "All 2
-    renderer process(es) run at UNTRUSTED integrity" while a third of unknown
-    containment hosted page content. The caller must refuse to go green while it is
-    non-zero.
-    """
+    """Facts about this session's renderers. The caller must not go green while
+    `unreadable` is non-zero."""
     facts = [read(pid) for pid in renderer_pids]
     readable = [f for f in facts if f.readable]
     unreadable = len(facts) - len(readable)

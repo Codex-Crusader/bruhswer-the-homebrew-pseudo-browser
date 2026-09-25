@@ -1,26 +1,15 @@
 """Property tests for address-bar normalisation.
 
-test_security.py already checks specific refusals, but examples only prove the cases
-someone thought of. `urls.normalise` is where typed text becomes an argv element handed
-to a browser process, so what matters is the invariants that hold for every input.
+Invariants over a fixed corpus (not random, so it can gate a release):
 
-The corpus is fixed and seeded rather than random: a fuzz test that finds a different
-failure on every run cannot be a release gate. New pathological inputs get appended;
-nothing is generated from the clock.
+    P1  returns a str or raises RefusedURL, nothing else
+    P2  output is http://, https:// or exactly "about:blank"
+    P3  output has no control, invisible or direction-changing character
+    P4  output has no newline or carriage return
+    P5  UNC paths, drive letters and forbidden schemes are always refused
+    P6  output survives edge.build_command()
 
-    P1  normalise() returns a str or raises RefusedURL. No other exception escapes - a
-        ValueError out of URL parsing would reach the UI as an unhandled crash.
-    P2  Any returned value is http://, https://, or exactly "about:blank".
-    P3  No returned value contains a control, invisible, or direction-changing char.
-    P4  No returned value contains a newline or carriage return.
-    P5  UNC paths, drive letters and forbidden schemes are ALWAYS refused.
-    P6  Anything normalise() returns survives edge.build_command() without raising.
-        This ties the two modules together: a URL this one blesses and the launcher
-        rejects would be a crash on the navigate path.
-
-It does NOT claim homoglyph safety - "example.com" with a Cyrillic 'a' is ordinary
-visible text and is not refused. Asserting otherwise would make this file the thing it
-exists to prevent: a test whose passing implies a protection that was never built.
+Homoglyphs are NOT refused, and a test pins that boundary.
 """
 
 from __future__ import annotations
@@ -35,8 +24,7 @@ if str(_ROOT) not in sys.path:
 
 from app.browser import edge, urls  # noqa: E402
 
-# Every character urls._DECEPTIVE refuses, written as escapes for the same reason the
-# module constant is: literal invisibles in source cannot be reviewed by reading it.
+# As escapes: literal invisibles cannot be reviewed.
 DECEPTIVE_CHARS = (
     "\u00ad", "\u061c", "\u200b", "\u200c", "\u200d", "\u200e", "\u200f",
     "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
@@ -46,8 +34,6 @@ DECEPTIVE_CHARS = (
 # Characters that must never appear in anything normalise() hands back.
 FORBIDDEN_IN_OUTPUT = (*(chr(c) for c in range(0x20)), "\x7f", *DECEPTIVE_CHARS)
 
-# --- the corpus -----------------------------------------------------------------
-# Grouped by the reason each entry is here, so a failure says something.
 
 ORDINARY = [
     "example.com",
@@ -110,8 +96,7 @@ def _with_every_control_char() -> list[str]:
 
 
 PATHOLOGICAL = [
-    # Homoglyphs. NOT expected to be refused - only expected not to crash, and not to
-    # come back carrying anything from FORBIDDEN_IN_OUTPUT.
+    # Homoglyphs: not refused, only must not crash.
     "https://ex\u0430mple.com",          # Cyrillic a
     "\u0440\u0430\u0443\u0440\u0430l.com",
     "https://xn--80ak6aa92e.com",        # punycode, a legitimate encoding
@@ -125,11 +110,7 @@ PATHOLOGICAL = [
     "https://example.com:99999",
     "https://[::1]:8080/",
     "https://[fe80::1%eth0]/",
-    # MEASURED: each of these makes urlparse() itself raise ValueError ("Invalid IPv6
-    # URL" / "does not appear to be an IPv4 or IPv6 address"). Before normalise() caught
-    # it, that ValueError escaped to the caller - a second failure mode the UI does not
-    # handle, reaching Tk as an unhandled exception rather than a refusal. These entries
-    # are what makes P1 a real test instead of a restatement of the happy path.
+    # Measured: each makes urlparse() raise ValueError, which once escaped to Tk.
     "https://[fe80::1",
     "https://[",
     "https://[]",
@@ -174,7 +155,7 @@ class TestNormaliseProperties(unittest.TestCase):
     """P1-P4 and P6, asserted over every corpus entry."""
 
     def test_corpus_is_actually_populated(self):
-        """A property suite that iterates an empty list passes and proves nothing."""
+        """An empty corpus would pass and prove nothing."""
         self.assertGreater(len(CORPUS), 200, f"corpus is only {len(CORPUS)} entries")
 
     def test_p1_only_refusedurl_escapes(self):
@@ -222,7 +203,7 @@ class TestNormaliseProperties(unittest.TestCase):
                 self.assertNotIn("\r", result)
 
     def test_p6_every_accepted_url_survives_build_command(self):
-        """The invariant that ties normalise() to where its output actually goes."""
+        """P6."""
         for text in CORPUS:
             with self.subTest(text=text[:60]):
                 try:
@@ -260,8 +241,7 @@ class TestNormaliseRefusals(unittest.TestCase):
                     urls.normalise(text)
 
     def test_every_deceptive_character_is_refused_in_an_http_url(self):
-        """The explicit-scheme branch returns `raw` verbatim, so this is the path that
-        could actually hand a reordered address to the browser."""
+        """The http(s) branch returns the text verbatim, so it must refuse them."""
         for ch in DECEPTIVE_CHARS:
             with self.subTest(char=f"U+{ord(ch):04X}"):
                 with self.assertRaises(urls.RefusedURL):
@@ -281,15 +261,8 @@ class TestNormaliseRefusals(unittest.TestCase):
         self.assertTrue(urls.normalise("hello world").startswith("https://www.bing.com"))
 
     def test_homoglyph_is_not_claimed_to_be_caught(self):
-        """Pins the HONEST BOUNDARY as a test, so nobody later reads the deceptive-char
-        filter as homoglyph protection.
-
-        A Cyrillic lookalike is ordinary visible text: bruhswer passes it through, and
-        the README/UI must not imply otherwise. If someone ever DOES build real
-        confusable detection, this test failing is the signal to update the claims that
-        go with it - which is the point of asserting a limitation rather than leaving
-        it in a comment.
-        """
+        """Pins the boundary: a Cyrillic lookalike passes. If this ever fails, update
+        the claims too."""
         cyrillic_a = "ex\u0430mple.com"
         self.assertNotIn(cyrillic_a, ("example.com",))
         result = urls.normalise(f"https://{cyrillic_a}")

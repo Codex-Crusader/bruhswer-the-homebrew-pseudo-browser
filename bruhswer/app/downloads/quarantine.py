@@ -1,17 +1,8 @@
-"""Download quarantine — nothing reaches the user's real folders without them saying so.
+"""Download quarantine: website -> quarantine -> user review -> explicit export.
 
-Flow (brief SS36):   website -> quarantine -> user review -> explicit export
-
-Rules that are not negotiable:
-  - bruhswer NEVER executes a downloaded file, and never opens one with the shell.
-  - The webpage cannot choose the destination. The user picks it, in bruhswer's UI.
-  - Export filenames are rebuilt by bruhswer from scratch. The name the site supplied
-    is treated as hostile text, not as a path.
-  - Path traversal, UNC paths, device names, alternate data streams, symlinks and
-    reparse points are excluded by construction rather than filtered one by one.
-
-bruhswer does not claim to detect malware. It says a file is quarantined, which is a
-fact, and it does not say a file is safe, which it cannot know (brief SS37).
+bruhswer never runs a download. The user picks the export folder. Export names are
+rebuilt from scratch, so traversal, device names, streams and reparse points are
+excluded by construction. bruhswer does not detect malware and never calls a file safe.
 """
 
 from __future__ import annotations
@@ -28,7 +19,7 @@ from ..logging_setup import get_logger
 
 _log = get_logger("downloads")
 
-# Windows reserved device names. Creating any of these can have side effects.
+# Windows reserved device names.
 _RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
              *(f"lpt{i}" for i in range(1, 10))}
 
@@ -40,17 +31,10 @@ EXECUTABLE_SUFFIXES = {
     ".reg", ".lnk", ".inf", ".sys", ".scf", ".appx", ".msix",
 }
 
-# NOT programs, so NOT in the set above: that set also decides extension_mismatch, and
-# a PE named "invoice.iso" must keep its mismatch warning. Each of these is a known way
-# to deliver one, so each gets its own warning.
-#
-# Disk images mount as a drive, and Windows versions before the November 2022 update
-# did not pass Mark of the Web to the files inside: the route attackers used to get a
-# program past SmartScreen.
+# Not programs, so not in the set above, which also drives extension_mismatch. Disk
+# images once hid their contents from Mark of the Web (before the November 2022 update).
 CONTAINER_SUFFIXES = {".iso", ".img", ".vhd", ".vhdx"}
 
-# Office documents that can run macros, and OneNote files, which can embed a program
-# the user runs with one click.
 ACTIVE_DOCUMENT_SUFFIXES = {
     ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppsm",
     ".one", ".onepkg",
@@ -63,15 +47,8 @@ _TYPE_WARNINGS: tuple[tuple[set[str], str], ...] = (
     (ACTIVE_DOCUMENT_SUFFIXES, "this document can run macros or embedded programs."),
 )
 
-# --- content sniffing -----------------------------------------------------------
-# An extension is a CLAIM MADE BY THE WEBSITE, and it is all `is_executable_type` has:
-# a PE image named "invoice.pdf" draws no warning from a suffix check. So the first
-# bytes are read too.
-#
-# FILE FORMAT signatures, not malware signatures. This can say "these bytes are a
-# Windows executable image", which is a fact; it cannot say "this file is malware" or
-# "this file is safe", neither of which is measured. A clean result here means "nothing
-# recognised", never "safe".
+# The extension is the website's claim, so the first bytes are read too. These are file
+# FORMAT signatures, not malware signatures: no match means "not recognised", not "safe".
 _MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"MZ", "Windows executable (PE)"),
     (b"\x7fELF", "ELF executable"),
@@ -84,26 +61,16 @@ _MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"%PDF-", "PDF document"),
 )
 
-# Formats that ARE directly loadable code on this platform. A ZIP is not on this list:
-# it is a container, and calling every .zip "executable" would train the user to ignore
-# the warning, which is worse than not showing one.
+# Directly loadable code. Not ZIP: warning on every .zip would train users to ignore it.
 _EXECUTABLE_KINDS = frozenset({
     "Windows executable (PE)", "ELF executable", "Java class / Mach-O fat binary",
 })
 
-# Derived from the table, not written next to it. It was a literal 8, which happened to
-# equal the longest signature above - so adding a longer one would have left it silently
-# unmatchable, with sniff_kind reporting "nothing recognised" for the format it had just
-# been taught.
 _MAGIC_BYTES = max(len(signature) for signature, _label in _MAGIC)
 
 
 def sniff_kind(path: Path) -> str | None:
-    """The file format the BYTES say this is, or None if nothing is recognised.
-
-    Never raises, and never reads more than the signature: a quarantined file is
-    hostile input, and bruhswer has no reason to pull it into memory.
-    """
+    """The format the first bytes show, or None. Reads only the signature."""
     try:
         with path.open("rb") as handle:
             head = handle.read(_MAGIC_BYTES)
@@ -122,7 +89,6 @@ class QuarantinedFile:
     path: Path
     size: int
     modified: datetime
-    # What the BYTES say (None = nothing recognised, which is not the same as "safe").
     sniffed_kind: str | None = None
 
     @property
@@ -136,11 +102,7 @@ class QuarantinedFile:
 
     @property
     def type_warning(self) -> str | None:
-        """What the NAME says this file can do, for the UI, or None.
-
-        The one place both quarantine renderers read, so a new risky type is added
-        once. Site-controlled like is_executable_type; content_note covers the bytes.
-        """
+        """UI warning for what the NAME says this file can do, or None."""
         suffix = self.path.suffix.lower()
         for suffixes, warning in _TYPE_WARNINGS:
             if suffix in suffixes:
@@ -154,20 +116,12 @@ class QuarantinedFile:
 
     @property
     def extension_mismatch(self) -> bool:
-        """The bytes are executable and the name does NOT admit it.
-
-        Worth a distinct warning, because `is_executable_type` stays quiet for a PE
-        called "invoice.pdf".
-
-        One-directional on purpose: an .exe whose bytes are a PE is consistent and
-        already flagged by name, and an unrecognised format is NOT a mismatch, because
-        "bruhswer did not recognise these bytes" is not evidence of anything.
-        """
+        """Executable bytes under a name that does not say so ("invoice.pdf")."""
         return self.is_executable_content and not self.is_executable_type
 
     @property
     def content_note(self) -> str:
-        """One line for the UI. States the format, never a safety verdict."""
+        """One UI line stating the format, never a safety verdict."""
         if self.sniffed_kind is None:
             return "Content not recognised. That is not a clean bill of health."
         if self.extension_mismatch:
@@ -177,14 +131,7 @@ class QuarantinedFile:
 
 
 def folder_name_for(session_id: str) -> str:
-    """The on-disk quarantine folder name for a session id. Naming only, no I/O.
-
-    The single derivation. session_manager kept its own copy, justified by a comment
-    claiming a session id is "always 16 hex characters" - true for disposable sessions,
-    not for "persistent000000". Both callers happened to be guarded to disposable
-    sessions, so the divergence was never live, but it existed behind a comment
-    asserting it could not.
-    """
+    """The quarantine folder name for a session id. The only derivation; no I/O."""
     return _SAFE_CHARS.sub("", session_id)[:32] or "session"
 
 
@@ -195,12 +142,8 @@ def quarantine_dir_for(session_id: str) -> Path:
 
 
 def safe_export_name(untrusted_name: str) -> str:
-    """Rebuild a filename from an untrusted one. Never returns a path, only a name.
-
-    Everything structural is removed rather than escaped: separators, drive letters,
-    traversal, streams, and leading dots. If nothing usable survives, bruhswer supplies
-    its own name.
-    """
+    """Rebuild a filename from an untrusted one. Separators, drives, streams and leading
+    dots are removed, not escaped. Never returns a path."""
     name = untrusted_name.replace("\x00", "")
     name = name.replace("\\", "/").split("/")[-1]   # drop any path structure
     name = name.split(":")[-1]                      # drop drive letters and ADS
@@ -236,12 +179,8 @@ def list_quarantine(session_id: str) -> list[QuarantinedFile]:
 
 
 def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
-    """Copy one quarantined file out, to a folder the USER chose.
-
-    Refuses if the source is not inside quarantine, or is a link/reparse point. The
-    copy never preserves the executable bit concept (Windows has none) and bruhswer
-    does not launch the result.
-    """
+    """Copy one quarantined file to a folder the user chose. Refuses a source outside
+    quarantine and any link or reparse point."""
     quarantine_root = config.QUARANTINE.resolve()
     try:
         source = item.path.resolve(strict=True)
@@ -252,8 +191,7 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         _log.error("export refused: source outside quarantine")
         return False, "Refused: that file is not inside quarantine."
 
-    # A reparse point could redirect the read somewhere else entirely. Both halves are
-    # needed: on Windows a junction is a reparse point that is NOT a symlink.
+    # Both tests: a junction is a reparse point but not a symlink.
     try:
         if (os.path.islink(item.path)  # noqa: PTH114
                 or (item.path.stat(follow_symlinks=False).st_file_attributes
@@ -269,12 +207,7 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
     if not dest_dir.is_dir():
         return False, "Destination is not a folder."
 
-    # The destination gets the same treatment as the source: a junction looks like an
-    # ordinary folder in the Windows picker, and selecting one would land the export
-    # somewhere the user did not choose. is_symlink() is NOT sufficient - measured, it
-    # returns False for a directory junction - so the reparse-point attribute is the
-    # test that fires. Checked AS SELECTED, before resolve() follows the link away and
-    # destroys the evidence that there was one.
+    # A junction looks like a folder in the picker. Checked before resolve() follows it.
     try:
         attrs = destination_dir.stat(follow_symlinks=False).st_file_attributes
         if attrs & config.FILE_ATTRIBUTE_REPARSE_POINT:
@@ -293,11 +226,7 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         if counter > 999:
             return False, "Could not find a free filename in that folder."
 
-    # Belt and braces on top of safe_export_name(). That function already strips every
-    # separator, so the name cannot climb out - but this asserts the RESULT rather than
-    # trusting the sanitiser, which is the same discipline the profile-delete path uses.
-    # If these ever disagree, the export is refused instead of landing outside the
-    # folder the user picked.
+    # Assert the result instead of trusting safe_export_name().
     if final.parent != dest_dir:
         _log.error("export refused: final path escaped the chosen folder")
         return False, "Refused: the export path did not stay inside the chosen folder."
@@ -308,10 +237,7 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
         _log.error("export failed: %s", exc.__class__.__name__)
         return False, f"Copy failed: {exc.__class__.__name__}"
 
-    # The copy leaves quarantine only as a file Windows knows came from the internet.
-    # If the mark cannot be written, the copy is removed: an unmarked copy opens with
-    # no SmartScreen or Protected View prompt, and reporting that as an export would be
-    # a green light over a missing control.
+    # An unmarked copy opens with no SmartScreen prompt, so it is removed instead.
     if not mark_of_the_web(final):
         try:
             final.unlink()
@@ -331,17 +257,11 @@ def export(item: QuarantinedFile, destination_dir: Path) -> tuple[bool, str]:
 
 
 def mark_of_the_web(path: Path) -> bool:
-    """Write Zone.Identifier (Internet zone) on `path`, then read it back.
-
-    True only when the read-back shows the zone bruhswer wrote. Drives without
-    alternate data streams (FAT32, exFAT, some network shares) fail here, and that is
-    reported, not assumed away. Overwrites any stream the copy carried, which also
-    drops the source URL a browser records there.
-    """
+    """Write Zone.Identifier (Internet zone) on `path` and read it back. False on drives
+    without alternate data streams, such as FAT32 and exFAT."""
     wanted = f"ZoneId={config.ZONE_ID_INTERNET}"
     try:
-        # Built from the full path string, NOT path.with_name(): with_name reads the
-        # "a:" of a file called "a" as a drive and raises ValueError (measured, 3.11).
+        # Not with_name(): it raises ValueError for a file named "a" ("a:" = drive).
         stream = Path(f"{path}:{config.ZONE_IDENTIFIER_STREAM}")
         with stream.open("w", encoding="ascii", newline="\r\n") as handle:
             handle.write(f"[ZoneTransfer]\n{wanted}\n")

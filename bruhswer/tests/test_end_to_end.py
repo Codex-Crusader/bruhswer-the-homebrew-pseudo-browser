@@ -2,9 +2,7 @@
 
     python tests/test_end_to_end.py
 
-This is the test that proves the claims are true on THIS machine rather than true in
-principle. It starts a real disposable session with the real browser under the real
-firewall policy, then measures:
+A real disposable session under the real firewall policy, measuring:
 
   1. the session starts and BRUHWSER's own verifier allows it
   2. privacy settings actually stuck in the profile (read back, not assumed)
@@ -13,11 +11,8 @@ firewall policy, then measures:
   5. the browser CAN still reach localhost           <- the honest limitation
   6. the disposable profile is destroyed and verified gone
 
-Network probes use `msedge.exe --headless=new --dump-dom`, the same executable the
-firewall rule names, so the rule applies identically. Exit code is not a signal --
-Edge returns 0 even when it renders an error page -- so the verdict comes from the DOM.
-
-Targets are a single predetermined gateway address and 1.1.1.1. No scanning.
+Probes use the same msedge.exe headless; the verdict comes from the DOM, since Edge
+exits 0 on an error page. Targets: the gateway and 1.1.1.1 only.
 """
 
 from __future__ import annotations
@@ -38,8 +33,7 @@ from app.controller import controller as ctrl  # noqa: E402
 from app.privacy import privacy_guard  # noqa: E402
 from app.sessions import session_manager  # noqa: E402
 
-# Discovered at run time - see tests/_env.py. Hardcoding one machine's
-# gateway made this suite pass while probing an address that did not exist.
+# Discovered at run time (tests/_env.py).
 ROUTER = _env.require_gateway()
 INTERNET = "https://1.1.1.1/"
 LOOPBACK_PORT = 18091
@@ -106,9 +100,6 @@ def main() -> int:
         return 1
 
     session = outcome.session
-    # Narrowed explicitly: a launched outcome always carries a session, and
-    # saying so lets the rest of this function read session.profile_dir
-    # without every access looking like an attribute on None.
     assert session is not None, "launch reported success without a session"
     check("profile directory created", session.profile_dir.is_dir(),
           str(session.profile_dir))

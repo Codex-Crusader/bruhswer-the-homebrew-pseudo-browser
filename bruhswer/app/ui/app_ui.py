@@ -1,14 +1,5 @@
-"""bruhswer control panel — tkinter, standard library only.
-
-Design rules taken from the brief:
-  SS6   the browser feels normal; the personality lives in labels and messages
-  SS7   status labels represent real measured state, never intentions
-  SS44  security and privacy are shown separately and never conflated
-  SS66  no dark patterns: nothing hides a protection or makes "turn it off" the big button
-
-The humour is in the wording. The verdicts are not. A control that was not verified is
-never coloured green, whatever it would do to the joke.
-"""
+"""The bruhswer control panel (--panel). The humour is in the wording, never in the
+verdicts: an unverified control is never green."""
 
 from __future__ import annotations
 
@@ -45,13 +36,8 @@ class BruhswerUI:
         self.root.configure(bg=config.BG_DARK)
         self.root.geometry("880x720")
         self.root.minsize(760, 620)
-        # Annotated for the same reason as BrowserWindow.result - see the note there.
         self._result: verifier.VerificationResult | None = None
 
-        # Declared here so the whole of this window's state is visible in one place.
-        # Annotation only, no assignment: that registers the attribute without
-        # widening its type to include None, which would make every later use of it
-        # an Optional-access warning.
         self.tab_status: tk.Frame
         self.tab_network: tk.Frame
         self.tab_host: tk.Frame
@@ -70,19 +56,12 @@ class BruhswerUI:
 
     @property
     def _checked(self) -> verifier.VerificationResult:
-        """The current verification result, which every render path requires.
-
-        refresh() sets `_result` before any render runs, so this precondition already
-        held - it was just implicit, which left every `self._checked.checks` reading as
-        an attribute access on None to any checker. Raising here states the contract
-        instead of hiding it behind an AttributeError.
-        """
+        """The current result; refresh() sets it before any render runs."""
         result = self._result
         if result is None:
             raise RuntimeError("render called before refresh(): no result yet")
         return result
 
-    # --- construction -----------------------------------------------------------
 
     def _build(self) -> None:
         self._build_header()
@@ -127,7 +106,6 @@ class BruhswerUI:
         wordmark.pack(side="left")
         tk.Label(wordmark, text=config.MOAI, font=("Segoe UI Emoji", 26),
                  bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left", padx=(0, 10))
-        # Wordmark: "bruh" yellow + "swer" white, one word, one line (SS33).
         tk.Label(wordmark, text=config.WORDMARK_HEAD, font=("Segoe UI", 26, "bold"),
                  bg=config.BG_DARK, fg=config.BRAND_YELLOW).pack(side="left")
         tk.Label(wordmark, text=config.WORDMARK_TAIL, font=("Segoe UI", 26, "bold"),
@@ -177,7 +155,6 @@ class BruhswerUI:
                   font=("Segoe UI", 10), cursor="hand2").pack(
         side="right", padx=6, pady=8)
 
-    # --- tabs -------------------------------------------------------------------
 
     @staticmethod
     def _scroll_area(parent: tk.Frame) -> tk.Frame:
@@ -202,9 +179,7 @@ class BruhswerUI:
         for label, state in network_guard.policy_summary():
             row = tk.Frame(body, bg=config.BG_DARK)
             row.pack(fill="x", padx=18, pady=2)
-            # The SHARED map, not a second inline copy. This dict was the other
-            # half of the same defect: it also lacked the new IPv6 state, so the
-            # --panel UI would have died with a KeyError building this tab.
+            # The shared map; a private copy once lacked a state and raised KeyError.
             colour = network_panel.state_colour(state)
             tk.Label(row, text=label, font=("Segoe UI", 10), width=26, anchor="w",
                      bg=config.BG_DARK, fg=config.BRAND_WHITE).pack(side="left")
@@ -253,7 +228,6 @@ class BruhswerUI:
     def _build_downloads_tab(self) -> None:
         self.downloads_body = self._scroll_area(self.tab_downloads)
 
-    # --- helpers ----------------------------------------------------------------
 
     @staticmethod
     def _section(parent: tk.Frame, title: str) -> None:
@@ -294,7 +268,6 @@ class BruhswerUI:
         for child in frame.winfo_children():
             child.destroy()
 
-    # --- actions ----------------------------------------------------------------
 
     def refresh(self) -> None:
         self.status_line.config(
@@ -337,8 +310,7 @@ class BruhswerUI:
             tk.Label(row, text=blurb, font=("Segoe UI", 9), anchor="w",
                      bg=config.BG_DARK, fg=config.FG_DIM).pack(side="left")
 
-        # Statements of fact rather than verdicts. LOCALHOST lives here so the
-        # limitation is on the front page, not buried in a tab (SS14, SS34).
+        # Facts, not verdicts; LOCALHOST stays on the front page.
         colours = {"ok": config.OK_GREEN, "warn": config.WARN_AMBER,
                    "off": config.OFF_GREY}
         session = self.controller.session
@@ -464,8 +436,6 @@ class BruhswerUI:
         self.refresh()
 
     def on_export(self, item: quarantine.QuarantinedFile) -> None:
-        # The destination comes from the USER's folder picker. A webpage can never
-        # reach this value (brief SS36, SS40).
         target = filedialog.askdirectory(title="Export to which folder?")
         if not target:
             return

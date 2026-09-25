@@ -2,12 +2,8 @@
 
     python tests/run_all.py
 
-Brief SS29: "A future change must not be allowed to silently weaken an existing
-control." This is the gate that enforces that. It runs the suites in dependency order
-and exits non-zero if any of them fails.
-
-Suites that need the network policy applied say so and are reported as SKIPPED rather
-than silently passing - a suite that quietly does nothing is worse than one that fails.
+Runs the suites in order and exits non-zero if any fails. Suites that need the network
+policy are reported SKIPPED without it, never passed.
 """
 
 from __future__ import annotations
@@ -26,9 +22,7 @@ from app import config, sysquery  # noqa: E402
 
 SUITES = [
     ("unit / static analysis", "test_security.py", False),
-    # Both of these are pure and need no network policy and no browser, so they run
-    # early: a URL-normalisation or overclaim regression should fail the suite in
-    # milliseconds rather than after the multi-minute browser suites.
+    # Fast pure suites first, so a regression fails in milliseconds.
     ("address bar properties", "test_urls_fuzz.py", False),
     ("overclaim regressions", "test_overclaim_regressions.py", False),
     ("evidence model", "test_evidence_model.py", False),
@@ -49,14 +43,8 @@ SUITES = [
 
 
 def main() -> int:
-    # Same reason as bruhswer.py's _use_utf8_stdio: under CI, and under any plain
-    # redirection, stdout is a pipe and Python falls back to the legacy ANSI codepage.
-    # The suite used to die on its own banner before running a single test.
+    # As in bruhswer.py: a piped stdout falls back to the ANSI codepage.
     for stream in (sys.stdout, sys.stderr):
-        # getattr rather than a direct call: `reconfigure` exists on TextIOWrapper
-        # but not on every TextIO a stream can be, so a direct call is an unresolved
-        # reference to every static checker. The behaviour is identical - the old
-        # code caught AttributeError for exactly this case.
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
@@ -85,23 +73,14 @@ def main() -> int:
 
         print(f"\n>>> {label}")
         start = time.perf_counter()
-        # The child's own stdout is a pipe too, so it picks the legacy ANSI codepage
-        # exactly as this script did. Reading the pipe back as UTF-8 while the child
-        # writes cp1252 would mangle any non-ASCII a suite reports - so tell the child
-        # what encoding to use rather than guessing at the far end.
+        # Tell the child to write UTF-8, or its piped output arrives as cp1252.
         child_env = dict(os.environ, PYTHONIOENCODING="utf-8")
         proc = subprocess.run([sys.executable, str(_HERE / script)],
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", shell=False, env=child_env)
         elapsed = time.perf_counter() - start
 
-        # BOTH streams, for the same reason the failure scan below already reads both:
-        # `unittest` writes "Ran N tests" and "OK" to STDERR, while the older
-        # hand-rolled suites print "PASSED n FAILED n" to stdout. Scanning stdout only
-        # meant every unittest-based suite reported a blank line under its name - it
-        # passed, and the run showed no evidence that it had. This project's own rule
-        # is to take counts from the run output, so a runner that prints no counts
-        # quietly defeats it.
+        # Both streams: unittest writes its counts to stderr, the older suites to stdout.
         combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()
         summary = [ln for ln in combined
                    if "PASSED" in ln or ln.startswith("Ran ") or ln.startswith("OK")]
@@ -113,10 +92,6 @@ def main() -> int:
         else:
             rows.append((label, "FAIL", elapsed))
             failures += 1
-            # BOTH streams. test_security.py runs unittest, which writes "FAIL: test_x"
-            # and its summary to STDERR, so a stdout-only scan concluded a perfectly
-            # ordinary assertion failure had "crashed" - replacing one misleading
-            # report with a different one.
             reported = 0
             for line in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines():
                 stripped = line.strip()
@@ -125,11 +100,7 @@ def main() -> int:
                     print(f"    {stripped}")
                     reported += 1
 
-            # A suite that CRASHES fails without ever printing an assertion, and its
-            # traceback goes to stderr - which was captured and then thrown away, so
-            # the operator saw "FAIL" and nothing else. That happened, and the only
-            # way to learn anything was to re-run the suite by hand, by which point it
-            # passed. Evidence that exists must not be discarded.
+            # A crash prints no assertion; show its stderr rather than just "FAIL".
             if not reported:
                 tail = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
                 print(f"    no assertion failed - suite exited {proc.returncode}, "

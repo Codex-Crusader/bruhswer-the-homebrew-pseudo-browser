@@ -13,16 +13,13 @@ from .. import config
 
 
 def _accept(answer: dict, window: tk.Toplevel) -> None:
-    """Record the choice, then close. A named function rather than a lambda wrapping
-    a tuple of two calls: dict.__setitem__ and Widget.destroy both return None, so
-    using them as tuple elements to sequence side effects is opaque, and every
-    inspector flags a call-that-returns-nothing used as a value."""
+    """Record the choice, then close."""
     answer["go"] = True
     window.destroy()
 
 
 def _close_anyway(window: tk.Toplevel, then) -> None:
-    """Dismiss the warning, then run the caller's continuation. Same reasoning."""
+    """Dismiss the warning, then run the caller's continuation."""
     window.destroy()
     then()
 
@@ -66,10 +63,8 @@ def confirm_disposable_downloads(root: tk.Tk, pending: list) -> bool:
     return answer["go"]
 
 
-# `tk.Tk`, not `tk.Misc`: these dialogs call transient(), which needs a real
-# window manager rather than any widget, and both callers pass the root.
 def cleanup_incomplete(root: tk.Tk, message: str, on_close_anyway) -> None:
-    """Report a teardown that did not fully succeed. Never claim a clean exit (SS34)."""
+    """Report a teardown that did not fully succeed."""
     warn = tk.Toplevel(root)
     warn.title("bruhswer")
     warn.configure(bg=config.BG_DARK)

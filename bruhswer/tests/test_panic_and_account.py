@@ -1,13 +1,7 @@
 """Tests for the panic key and the account-settings path.
 
-The panic key TERMINATES processes, which raises the bar on attribution from "good
-enough to count" to "good enough to kill". The tests that matter are the ones proving
-bruhswer refuses to kill anything whose identity it cannot still confirm - because the
-failure mode is terminating the user's own browser, and the constraint that it must
-never do that outranks panic completeness.
-
-The refusal test uses a REAL process with a REAL creation time rather than a mock, so
-it measures the actual Win32 behaviour instead of restating the implementation.
+The panic key kills processes, so the key property is refusing any whose identity is
+not confirmed. The refusal test uses a real process, not a mock.
 """
 
 from __future__ import annotations
@@ -42,7 +36,6 @@ def _creation_of(pid: int) -> int | None:
     if not handle:
         return None
     try:
-        # protected-access: measures the real Win32 identity helpers
         return embed._creation_filetime(handle)  # lint: allow protected-access
     finally:
         embed.KERNEL32.CloseHandle(ctypes.wintypes.HANDLE(handle))
@@ -52,26 +45,13 @@ class TestTerminationAttribution(unittest.TestCase):
     """The PID-reuse guard, measured rather than asserted."""
 
     def test_a_wrong_creation_time_is_refused_and_the_process_survives(self):
-        """This is the whole safety property.
-
-        A PID can be recycled between enumeration and termination. Checking only the
-        image name would not catch a PID that became ANOTHER msedge.exe - which is the
-        user's own browser, the one thing bruhswer must never kill. Comparing the
-        creation time read back from the opened handle identifies the process INSTANCE,
-        so a mismatch must be refused.
-        """
+        """A recycled PID (maybe the user's own Edge) is refused on creation time."""
         victim = _spawn_victim()
         try:
             real = _creation_of(victim.pid)
             self.assertIsNotNone(real, "could not read the victim's creation time")
 
-            # Same PID, wrong instance identity - exactly what PID reuse looks like.
-            #
-            # One SECOND off, not one tick. The comparison is deliberately made at
-            # microsecond resolution (the two Windows sources have different
-            # precision), so a 100ns offset is the SAME instance and must not be
-            # refused. A recycled PID is a different process created at a different
-            # time, which is orders of magnitude further away than this.
+            # One second off: a 100ns offset is the same instance at this precision.
             stale = embed.EdgeProcess(victim.pid, real + 10_000_000)
             report = embed.terminate_attributed([stale])
 
@@ -95,8 +75,6 @@ class TestTerminationAttribution(unittest.TestCase):
 
             self.assertEqual(report.terminated, 1)
             self.assertEqual(report.refused, 0)
-            # TerminateProcess is asynchronous, so the report distinguishes "asked" from
-            # "observed to have exited". This one should be confirmed.
             self.assertEqual(report.confirmed_exited, 1)
             self.assertIsNotNone(victim.poll(), "the process is still running")
         finally:
@@ -120,20 +98,9 @@ class TestTerminationAttribution(unittest.TestCase):
 
 
 class TestCreationTimePrecision(unittest.TestCase):
-    """The bug that made the panic key completely inert.
-
-    Found by the real GUI walkthrough: "0 terminated; 9 left alone (identity no longer
-    matched)" with nine live Edge processes still running. Every process was refused.
-
-    Cause: the two creation-time sources have DIFFERENT PRECISION.
-        GetProcessTimes    full 100ns resolution
-        CIM CreationDate   truncated to microseconds (always a multiple of 10 ticks)
-    so `==` essentially never holds.
-
-    The original unit test missed it because it read BOTH sides with GetProcessTimes -
-    self-consistent, and therefore proof of nothing about the path that actually runs.
-    These tests compare the two REAL sources.
-    """
+    """The bug that made the panic key inert: GetProcessTimes (100ns) and CIM
+    CreationDate (microseconds) never compared equal. The old test read one source
+    twice; these compare the two real sources."""
 
     @staticmethod
     def _cim_creation(pid: int) -> int | None:
@@ -169,10 +136,7 @@ class TestCreationTimePrecision(unittest.TestCase):
             victim.wait(timeout=10)
 
     def test_a_real_enumerated_process_is_actually_terminated(self):
-        """End to end through the REAL enumeration path, not a hand-built value.
-
-        This is the test that would have caught the inert panic key.
-        """
+        """End to end through the real enumeration path."""
         victim = _spawn_victim()
         try:
             time.sleep(0.8)
@@ -209,9 +173,7 @@ class TestAttributedEnumeration(unittest.TestCase):
         self.assertEqual(result, [])
 
     def test_matching_is_case_insensitive_and_quote_insensitive(self):
-        """subprocess quotes an argument only when it contains a space, so the same
-        profile appears quoted on one machine and bare on another."""
-        # protected-access: measures the real Win32 identity helpers.
+        """A path is quoted only when it contains a space."""
         bare = embed._normalise_cmdline(  # lint: allow protected-access
             r'--user-data-dir=C:\Users\someone\Profile')
         quoted = embed._normalise_cmdline(  # lint: allow protected-access
@@ -232,12 +194,7 @@ class TestPanicHotkeyRegistration(unittest.TestCase):
         self.assertFalse(hotkey.available, "the hotkey was not released on stop()")
 
     def test_a_conflicting_registration_reports_unavailable_never_armed(self):
-        """Two bruhswer instances, or any other app owning the combination.
-
-        The second instance must SAY it has no panic key. Silently degrading to
-        something weaker under the same name would leave the user believing in an
-        escape hatch they do not have.
-        """
+        """If another app owns the key, the UI says so."""
         first = panic_key.PanicHotkey()
         second = panic_key.PanicHotkey()
         try:
@@ -297,9 +254,7 @@ class TestAccountSettingsTarget(unittest.TestCase):
 
     def test_the_allowlist_holds_exactly_two_entries(self):
         """A growing allowlist is how this becomes a general internal-URL channel."""
-        # protected-access: measures the real Win32 identity helpers
         self.assertEqual(len(edge._ALLOWED_NON_HTTP), 2)  # lint: allow protected-access
-        # protected-access: measures the real Win32 identity helpers
         self.assertIn(edge.BLANK, edge._ALLOWED_NON_HTTP)  # lint: allow protected-access
         self.assertIn(edge.PROFILES_SETTINGS,
                       edge._ALLOWED_NON_HTTP)  # lint: allow protected-access
