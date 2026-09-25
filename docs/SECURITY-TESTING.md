@@ -81,6 +81,7 @@ This is the list worth auditing. Everything else is bruhswer's own constants.
 | Address-bar text | `app/browser/urls.py::normalise` | Must become an `http(s)` URL or be refused. Anything else - `file:`, `javascript:`, `data:`, `vbscript:`, `blob:`, `chrome:`, `edge:`, `view-source:`, `ftp:`, `ws:`, `wss:`, UNC paths, drive letters, control characters - is refused, not escaped. |
 | Downloaded filename | `app/downloads/quarantine.py::safe_export_name` | Treated as hostile text. The name is rebuilt from scratch; separators, drive letters, ADS, traversal, reserved device names and leading dots are removed as a class rather than filtered case by case. |
 | Export destination | `app/ui/browser_window.py::_export` | Comes from the user's own folder picker. Never from a page, a download, or any external source. |
+| Exported copy | `app/downloads/quarantine.py::mark_of_the_web` | `Zone.Identifier` is written with the Internet zone and read back. If the destination drive cannot hold it (FAT32, exFAT, some network shares), the copy is removed and the export is refused. |
 | Downloaded file content | Never parsed | bruhswer never opens, executes, scans or inspects a downloaded file. It moves and lists them. |
 | Firewall rule readback | `app/sysquery.py::bruhswer_rules` | Parsed as JSON, compared against expected constants. A rule under bruhswer's prefix that it did not author is a launch blocker. |
 | Profile `Preferences` | `app/privacy/privacy_guard.py` | Read back to verify settings stuck. Chromium owns this file and rewrites it, so it is treated as untrusted JSON. |
@@ -91,9 +92,10 @@ This is the list worth auditing. Everything else is bruhswer's own constants.
 If you can break one of these, it is a finding:
 
 1. **No browser-controlled value ever reaches a path, an argv element, or a PowerShell
-   string.** `app/sysquery.py` is the only place an external program runs, every script
-   in it is a module constant, and the only interpolated values are bruhswer's own
-   constants or integers it validated.
+   string.** Programs run from `app/sysquery.py` and from four other modules, listed in
+   `ARCHITECTURE.md`. Every call uses a fixed path, an argument list and no shell.
+   `ARCHITECTURE.md` also lists each value that changes from call to call, and where
+   it comes from.
 2. **bruhswer opens no listening socket, named pipe or debugging port.** Enforced by an
    AST test, not just by intent.
 3. **The browser cannot launch with a security-weakening flag.** `edge.build_command`
@@ -201,6 +203,7 @@ than documented**, that absolutely is a finding.
 | **TOCTOU in the deletion guards.** The path could in principle be swapped between the check and `rmtree`. | Accepted. Needs handle-based APIs Python does not expose on Windows; an attacker who can win it already runs as the user. | `session_manager._safe_to_delete` |
 | **No encryption at rest added by bruhswer.** | A documented trade-off, with the reasoning and a correction to an earlier overclaim. | `DATA-INVENTORY.md` §4 |
 | CGNAT `100.64.0.0/10` is deliberately **not** blocked. | Intentional: it carries some users' only route to the internet. | `config.BLOCKED_IPV4` |
+| **The router and LAN block also covers the user's everyday Edge.** The rules match the `msedge.exe` path, so every Edge window on the PC loses router and LAN access while they exist. | By design. Windows Firewall matches a program, not a profile. Stated in the script output and the README. | `LIMITATIONS.md` §14, `tools/bruhswer-netpolicy.ps1` |
 
 ### Things previously tried that did not work
 

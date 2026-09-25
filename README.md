@@ -128,6 +128,11 @@ to get wrong. A test parses the source and fails the build if that ever changes.
   scope stops the sign-in. bruhswer measures it and shows it rather than hiding it.
 - **The browser process is not sandboxed.** Chromium's sandbox contains *renderers*. The
   browser process runs on an ordinary user token.
+- **The router and LAN block covers your everyday Edge too.** The firewall rules match
+  the `msedge.exe` program path, and Windows cannot tell a bruhswer session from any
+  other Edge window. While the rules exist, no Edge window on this PC can reach your
+  router or LAN. Other browsers and programs are not affected. Remove the rules with
+  `bruhswer-netpolicy.ps1 -Action remove`.
 - **It is not a VM, not anonymity, and not malware protection.** Quarantine means a file
   was not let out. It never means a file is safe.
 

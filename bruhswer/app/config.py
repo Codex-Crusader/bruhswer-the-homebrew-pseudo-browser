@@ -119,7 +119,13 @@ EDGE_CANDIDATES = (
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
 )
 
+# Compared as whole distinguished-name fields, never as substrings: a substring test
+# accepted "CN=Not Microsoft Corporation Ltd". The issuer's O is checked and its CN is
+# not, on purpose: the CN names a CA generation (PCA 2011, PCA 2024) that Microsoft
+# rotates, and pinning it would turn the next rotation into a critical FAIL.
 EDGE_EXPECTED_SUBJECT_CN = "Microsoft Corporation"
+EDGE_EXPECTED_SUBJECT_O = "Microsoft Corporation"
+EDGE_EXPECTED_ISSUER_O = "Microsoft Corporation"
 
 # --- Windows tooling (fixed absolute paths) -------------------------------------
 # CREATE_NO_WINDOW, passed as `creationflags` to every helper process, or each of the
@@ -133,6 +139,13 @@ ICACLS = SYSTEM32 / "icacls.exe"
 # FILE_ATTRIBUTE_REPARSE_POINT. The test that actually detects a directory junction:
 # Path.is_symlink() returns False for one, so the obvious check is inert.
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+# Mark of the Web: the NTFS alternate data stream Windows reads to decide whether a
+# file came from the internet, which is what makes SmartScreen and Office Protected
+# View engage when the user opens it. shutil.copy2 does not carry it on Python 3.11
+# (measured), so export writes it on the copy. Zone 3 is URLZONE_INTERNET.
+ZONE_IDENTIFIER_STREAM = "Zone.Identifier"
+ZONE_ID_INTERNET = 3
 
 # --- runtime re-verification ----------------------------------------------------
 # One pass starts 14 helper processes and takes 5.5s measured, so it runs on a worker

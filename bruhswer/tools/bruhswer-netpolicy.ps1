@@ -8,7 +8,9 @@
     can only VERIFY these rules, never create them (Stage 5 brief SS16).
 
     What it creates: outbound Block rules scoped by -Program to the Microsoft Edge
-    executable, denying private IPv4 ranges and local IPv6 ranges.
+    executable, denying private IPv4 ranges and local IPv6 ranges. They apply to
+    every Edge window on the PC, not only BRUHWSER sessions: the firewall matches the
+    program path, not the profile.
 
     Why this specific mechanism: Stage 4 gate A16 measured it working against the real
     browser - the router went REACHED -> BLOCKED -> REACHED with
@@ -139,7 +141,7 @@ foreach ($r in $Rules) {
   Write-Host ''
   Write-Host ('  CREATE  {0}' -f $r.Name)
   Write-Host  '          direction=Outbound  action=Block  profile=Any'
-  Write-Host ('          scoped to this program only: {0}' -f (Split-Path $edge -Leaf))
+  Write-Host ('          applies to every Edge window that runs: {0}' -f $edge)
   Write-Host ('          blocks: {0}' -f ($r.Remote -join ', '))
   Write-Host ('          that is: {0}' -f $r.What)
 }
@@ -148,6 +150,11 @@ Write-Host '  NOT changed: firewall profiles, Defender, SmartScreen, Secure Boot
 Write-Host '               VBS, HVCI, services, scheduled tasks, registry security.'
 Write-Host '  NOT possible: blocking 127.0.0.1 or this PC own IP. Windows Firewall'
 Write-Host '               does not filter loopback. Measured, not assumed.'
+Write-Host ''
+Write-Host '  ALSO AFFECTS: your everyday Edge. The rules match the msedge.exe path,'
+Write-Host '               so EVERY Edge window on this PC loses router and LAN'
+Write-Host '               access while they exist, not only BRUHWSER sessions.'
+Write-Host '               Other browsers and programs are not affected.'
 Write-Host ''
 Write-Host '  Undo at any time:  bruhswer-netpolicy.ps1 -Action remove'
 

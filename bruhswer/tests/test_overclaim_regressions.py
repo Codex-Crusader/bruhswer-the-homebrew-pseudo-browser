@@ -26,10 +26,14 @@ would have passed before the fix documents nothing.
                        same readers as an AttributeError, not as the sentinel they
                        render as UNKNOWN. Two of them run inside Controller.start(),
                        which has no handler.
+  6. CrashedGuard      a guard that raised became one NON-critical UNKNOWN, and the
+                       critical checks it would have produced were absent, so a crash
+                       in the edge, browser or network guard left may_launch True.
 """
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -391,6 +395,76 @@ class TestIPv6IsNotClaimedAsMeasured(unittest.TestCase):
         self.assertIs(effect[0].verdict, Verdict.UNKNOWN)
         self.assertFalse(effect[0].critical,
                          "an unmeasurable property must not block launch")
+
+
+# Every guard verify_all runs, and the attribute it looks up to run it. A guard that
+# verify_all gains without an entry here fails test_the_table_covers_every_guard.
+_GUARDS: dict[str, tuple[object, str]] = {
+    "edge": (verifier.edge, "verify_runtime"),
+    "browser": (browser_guard, "verify"),
+    "sandbox": (browser_guard, "verify_renderer_sandbox"),
+    "network": (network_guard, "verify"),
+    "host": (verifier.host_guard, "evaluate"),
+    "controller": (verifier, "_controller_checks"),
+    "integrity": (verifier.integrity, "verify"),
+    "privacy": (verifier, "_privacy_checks"),
+    "downloads": (verifier, "_download_checks"),
+    "dns": (verifier, "_dns_checks"),
+}
+
+
+def _passing(name: str):
+    """A stand-in guard that returns one critical PASS, whatever it is called with."""
+    def guard(*_args, **_kwargs):
+        return [verifier.Check(f"{name}.stub", f"{name} stub", Verdict.PASS,
+                               critical=True, detail="stub")]
+    return guard
+
+
+def _raising(*_args, **_kwargs):
+    raise RuntimeError("guard crashed")
+
+
+class TestCrashedGuardBlocksLaunch(unittest.TestCase):
+    """Defect 6. A guard that RAISED left may_launch True.
+
+    verify_all replaced the crash with one UNKNOWN at critical=False. The critical
+    checks that guard would have produced were simply absent, and blocks_launch() only
+    looks at critical checks, so a crash in the edge, browser or network guard removed
+    exactly the checks that should have stopped the launch. The existing
+    test_no_guard_crashed only shows that no guard crashed on one machine.
+    """
+
+    @staticmethod
+    def _verify(crashing: str | None):
+        with contextlib.ExitStack() as stack:
+            for name, (owner, attr) in _GUARDS.items():
+                stack.enter_context(mock.patch.object(
+                    owner, attr, _raising if name == crashing else _passing(name)))
+            return verifier.verify_all(Path("profile"), [], "standard",
+                                       Path("msedge.exe"), download_dir=Path("dl"))
+
+    def test_the_table_covers_every_guard(self):
+        ran = {t.name for t in self._verify(None).timings}
+        self.assertEqual(ran, set(_GUARDS),
+                         "verify_all runs a guard this test does not make crash")
+
+    def test_with_no_crash_the_stubs_allow_launch(self):
+        """Without this, every assertion below could pass for an unrelated reason."""
+        self.assertTrue(self._verify(None).may_launch)
+
+    def test_any_guard_that_raises_blocks_launch(self):
+        for name in _GUARDS:
+            with self.subTest(guard=name):
+                result = self._verify(name)
+                self.assertFalse(result.may_launch,
+                                 f"a crash in the {name} guard still allowed launch")
+                failed = [c for c in result.blockers
+                          if c.check_id == f"{name}.guard"]
+                self.assertEqual(len(failed), 1)
+                self.assertIs(failed[0].verdict, Verdict.UNKNOWN)
+                self.assertIsNot(failed[0].unknown_reason,
+                                 verifier.UnknownReason.NONE)
 
 
 if __name__ == "__main__":

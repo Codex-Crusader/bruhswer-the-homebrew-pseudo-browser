@@ -267,6 +267,23 @@ If any process was refused, failed, or could not be opened, the result says
 
 ---
 
+## 14. The router and LAN block covers every Edge window
+
+**Platform behaviour, stated rather than hidden**
+
+The firewall rules that block the router and LAN match the program path of
+`msedge.exe`. Windows Firewall matches a program, not a profile or a command line, so
+it cannot tell a bruhswer session from any other Edge window. While the rules exist,
+the user's everyday Edge also cannot reach the router admin page, a printer, a NAS or
+any other device on the LAN. Other browsers and programs are not affected.
+
+`bruhswer-netpolicy.ps1` says this before it asks for confirmation, and
+`-Action remove` takes the rules away. A copy of Edge at a separate path can give
+bruhswer its own program to match, but bruhswer uses the in-box, Microsoft-signed
+Edge on purpose, so that it adds no new trust root.
+
+---
+
 ## How to read this page
 
 If you are evaluating bruhswer: this list is the point, not the disclaimer. A security

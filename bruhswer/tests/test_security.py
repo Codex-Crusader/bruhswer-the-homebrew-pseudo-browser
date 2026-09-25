@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -161,11 +163,19 @@ class TestNoLocalListener(unittest.TestCase):
     there is nothing for a listener to do. These tests fail if that ever changes.
     """
 
-    # Modules whose entire purpose is to accept an inbound connection.
+    # Modules whose entire purpose is to accept an inbound connection, plus importlib:
+    # importlib.import_module("socket") names a banned module in a string, which this
+    # scan cannot see. __import__ is banned in TestNoDangerousPrimitives for the same
+    # reason.
+    #
+    # A STATIC scan, and it has a known gap: ctypes (used by embed.py, tokens.py and
+    # panic_key.py) can call Winsock directly. The runtime port check in
+    # test_localhost_surface.py is the control that catches a real listener; this one
+    # catches the obvious route early.
     BANNED_IMPORTS = {"socket", "socketserver", "http.server", "asyncio", "ssl",
                       "xmlrpc.server", "multiprocessing.connection", "wsgiref",
                       "flask", "fastapi", "aiohttp", "tornado", "uvicorn",
-                      "websockets", "werkzeug"}
+                      "websockets", "werkzeug", "importlib"}
 
     # Calls that open or accept on an endpoint, whatever the module they came from.
     #
@@ -498,6 +508,166 @@ class TestQuarantineExport(unittest.TestCase):
             path=Path("totally-legit.exe"), size=1,
             modified=session_manager.datetime.now(session_manager.timezone.utc))
         self.assertTrue(item.is_executable_type)
+
+    @staticmethod
+    def _item(name: str, sniffed: str | None = None) -> quarantine.QuarantinedFile:
+        return quarantine.QuarantinedFile(
+            path=Path(name), size=1,
+            modified=session_manager.datetime.now(session_manager.timezone.utc),
+            sniffed_kind=sniffed)
+
+    def test_disk_images_and_active_documents_carry_a_warning(self):
+        """ISO and VHD files were the route past Mark of the Web; macro documents and
+        OneNote files carry code. None of them drew a warning."""
+        for name in ("setup.iso", "disk.img", "disk.vhd", "disk.vhdx", "a.docm",
+                     "a.xlsm", "a.pptm", "notes.one", "INVOICE.ISO"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(self._item(name).type_warning)
+
+    def test_disk_images_are_not_called_programs(self):
+        item = self._item("setup.iso")
+        self.assertFalse(item.is_executable_type)
+        self.assertNotIn("program", item.type_warning)
+
+    def test_a_program_named_as_a_disk_image_is_still_a_mismatch(self):
+        """The container set must not feed extension_mismatch, or a PE called
+        'invoice.iso' loses the one warning that reads its bytes."""
+        item = self._item("invoice.iso", sniffed="Windows executable (PE)")
+        self.assertTrue(item.extension_mismatch)
+
+    def test_ordinary_files_carry_no_type_warning(self):
+        for name in ("photo.jpg", "report.pdf", "a.docx", "archive.zip"):
+            with self.subTest(name=name):
+                self.assertIsNone(self._item(name).type_warning)
+
+
+class TestExportKeepsMarkOfTheWeb(unittest.TestCase):
+    """An exported copy must still say it came from the internet.
+
+    shutil.copy2 dropped the Zone.Identifier stream on Python 3.11 (measured), so
+    SmartScreen and Office Protected View did not engage when the user opened the
+    export. The source here has NO stream, so the test cannot pass by copy2 carrying
+    one, on any Python version. The read-back uses PowerShell, not the Python code
+    that wrote the stream, so the test does not only measure its own writer.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="bruh-motw-"))
+        self.quarantine_root = self.tmp / "quarantine"
+        self.quarantine_root.mkdir()
+        self.dest = self.tmp / "exported"
+        self.dest.mkdir()
+        self.source = self.quarantine_root / "report.pdf"
+        self.source.write_bytes(b"%PDF-1.7 test")
+        self.item = quarantine.QuarantinedFile(
+            self.source, self.source.stat().st_size,
+            session_manager.datetime.now(session_manager.timezone.utc))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _export(self):
+        original = config.QUARANTINE
+        config.QUARANTINE = self.quarantine_root
+        try:
+            return quarantine.export(self.item, self.dest)
+        finally:
+            config.QUARANTINE = original
+
+    @staticmethod
+    def _stream_as_windows_reads_it(path: Path) -> str:
+        proc = subprocess.run(
+            [str(config.POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",
+             "Get-Content -LiteralPath $env:BRUH_MOTW_FILE "
+             f"-Stream {config.ZONE_IDENTIFIER_STREAM} -ErrorAction Stop"],
+            capture_output=True, text=True, timeout=60, shell=False,
+            creationflags=config.NO_WINDOW,
+            env={**os.environ, "BRUH_MOTW_FILE": str(path)})
+        return proc.stdout if proc.returncode == 0 else ""
+
+    def test_the_source_starts_without_a_mark(self):
+        """Without this, the test below could pass on a copy2 that carried a stream."""
+        self.assertEqual(self._stream_as_windows_reads_it(self.source), "")
+
+    def test_export_writes_the_internet_zone(self):
+        ok, message = self._export()
+        self.assertTrue(ok, message)
+        exported = self.dest / "report.pdf"
+        stream = self._stream_as_windows_reads_it(exported)
+        self.assertIn(f"ZoneId={config.ZONE_ID_INTERNET}", stream.splitlines())
+
+    def test_a_one_letter_name_is_marked_too(self):
+        """Path.with_name("a:Zone.Identifier") reads "a:" as a drive and raises
+        ValueError, which escaped export() after the copy and left it unmarked."""
+        self.source.rename(self.quarantine_root / "a")
+        self.item = quarantine.QuarantinedFile(
+            self.quarantine_root / "a", 1,
+            session_manager.datetime.now(session_manager.timezone.utc))
+        ok, message = self._export()
+        self.assertTrue(ok, message)
+        stream = self._stream_as_windows_reads_it(self.dest / "a")
+        self.assertIn(f"ZoneId={config.ZONE_ID_INTERNET}", stream.splitlines())
+
+    def test_export_is_refused_and_removed_when_the_mark_cannot_be_written(self):
+        original = quarantine.mark_of_the_web
+        quarantine.mark_of_the_web = lambda _path: False
+        try:
+            ok, message = self._export()
+        finally:
+            quarantine.mark_of_the_web = original
+        self.assertFalse(ok)
+        self.assertIn("Refused", message)
+        self.assertEqual(list(self.dest.iterdir()), [],
+                         "an unmarked copy was left in the user's folder")
+
+
+class TestEdgeSignerIsComparedByField(unittest.TestCase):
+    """The signer check was `"Microsoft Corporation" in subject`, a substring test."""
+
+    # Read from Get-AuthenticodeSignature on msedge.exe, 2026-09-25.
+    REAL_SUBJECT = ("CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, "
+                    "S=Washington, C=US")
+    REAL_ISSUER = ("CN=Microsoft Code Signing PCA 2024, O=Microsoft Corporation, "
+                   "C=US")
+
+    def test_the_real_signer_is_accepted(self):
+        self.assertTrue(edge.is_microsoft_signer(self.REAL_SUBJECT, self.REAL_ISSUER))
+
+    def test_lookalike_signers_are_refused(self):
+        lookalikes = [
+            "CN=Not Microsoft Corporation Ltd, O=Microsoft Corporation, C=US",
+            "CN=Microsoft Corporation Evil, O=Microsoft Corporation, C=US",
+            "CN=Evil, O=Microsoft Corporation, C=US",
+            "CN=Microsoft Corporation, O=Evil Ltd, C=US",
+            'CN="Microsoft Corporation, O=Microsoft Corporation", O=Evil, C=US',
+            "CN=Microsoft Corporation, CN=Evil, O=Microsoft Corporation, C=US",
+            "",
+        ]
+        for subject in lookalikes:
+            with self.subTest(subject=subject):
+                self.assertFalse(edge.is_microsoft_signer(subject, self.REAL_ISSUER))
+
+    def test_a_non_microsoft_issuer_is_refused(self):
+        for issuer in ("CN=Microsoft Code Signing PCA 2024, O=Evil CA, C=US",
+                       "CN=Evil CA, O=Microsoft Corporation Evil, C=US", ""):
+            with self.subTest(issuer=issuer):
+                self.assertFalse(edge.is_microsoft_signer(self.REAL_SUBJECT, issuer))
+
+    def test_quoted_values_are_parsed_whole(self):
+        fields = edge.dn_fields('CN=A, O="Contoso, ""The"" Ltd", C=US')
+        self.assertEqual(fields["O"], ['Contoso, "The" Ltd'])
+        self.assertEqual(fields["C"], ["US"])
+
+    def test_the_installed_edge_passes_through_the_production_probe(self):
+        """The fixtures above are one reading. This reads the signer the way
+        verify_runtime does, so a format the parser cannot handle fails here."""
+        edge_path = config.find_edge()
+        if edge_path is None:
+            self.skipTest("Microsoft Edge is not installed here")
+        signature = [c for c in edge.verify_runtime(edge_path)
+                     if c.check_id == "edge.signature"]
+        self.assertEqual(len(signature), 1)
+        self.assertIs(signature[0].verdict, Verdict.PASS, signature[0].evidence)
 
 
 class TestProfileCollisionUsesPathAncestry(unittest.TestCase):
