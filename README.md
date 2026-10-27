@@ -21,7 +21,7 @@
 </p>
 
 ---
-> **Written up in full:** [codex-crusader.github.io/projects/bruhswer/](https://codex-crusader.github.io/projects/bruhswer/) covers the problem, the architecture, the results and what it deliberately does not do.
+> **Written up in full:** [A hardened browser for Windows: fail-closed startup and honest security claims](https://codex-crusader.github.io/writing/browser-hardening/)
 
 
 bruhswer launches Microsoft Edge inside a set of security controls it **verifies before
